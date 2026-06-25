@@ -43,6 +43,11 @@ const connectToMongo = async (uri) => {
 const startServer = async () => {
   try {
     const uri = MONGO_URI || localMongoUri;
+    console.log("MONGO_URI =", process.env.MONGO_URI);
+    if (!process.env.MONGO_URI) {
+  console.error("MONGO_URI is not set");
+  process.exit(1);
+}
     await connectToMongo(uri);
     console.log(`MongoDB Connected (${uri.startsWith("mongodb+srv") ? "Atlas" : "Local"})`);
     await seedSongs();
