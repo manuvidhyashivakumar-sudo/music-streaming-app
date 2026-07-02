@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMusic } from "../context/MusicContext";
 import ShareButtons from "../components/ShareButtons";
+import InteractionPanel from "../components/InteractionPanel";
 
 export default function Player() {
   const { currentSong, toggleLike, addComment, playSong } = useMusic();
@@ -62,27 +63,13 @@ export default function Player() {
       </section>
 
       <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-        <h2 className="mb-4 text-2xl font-bold text-white">Comments</h2>
-
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          addComment(currentSong._id, commentText);
-          setCommentText("");
-        }} className="flex flex-col gap-3">
-          <textarea rows="4" value={commentText} onChange={(event) => setCommentText(event.target.value)} placeholder="Add a comment" className="w-full rounded-3xl border border-slate-800 bg-slate-950 p-4 text-sm text-white outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-500/30" />
-          <button type="submit" className="w-full rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400">Post comment</button>
-        </form>
-
-        <div className="mt-6 space-y-4">
-          {comments.length ? comments.map((comment, index) => (
-            <div key={index} className="rounded-3xl border border-slate-800 bg-slate-950 p-4">
-              <p className="text-sm font-semibold text-white">{comment.user}</p>
-              <p className="mt-2 text-sm text-slate-300">{comment.text}</p>
-            </div>
-          )) : (
-            <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-950 p-8 text-center text-slate-400">No comments yet. Be the first to share how this track makes you feel.</div>
-          )}
-        </div>
+        <h2 className="mb-4 text-2xl font-bold text-white">Interactions</h2>
+        <InteractionPanel
+          item={currentSong}
+          label="track"
+          onLike={() => toggleLike(currentSong._id)}
+          onComment={(text) => addComment(currentSong._id, text)}
+        />
       </section>
     </div>
   );

@@ -1,6 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || "/api",
+  timeout: 8000,
+});
+
 const MusicContext = createContext();
 
 const fallbackSongs = [
@@ -245,7 +250,7 @@ export function MusicProvider({ children }) {
   useEffect(() => {
     async function loadSongs() {
       try {
-        const response = await axios.get("/api/songs");
+        const response = await api.get("/songs");
         const backendSongs = Array.isArray(response.data) ? response.data : [];
         if (backendSongs.length) {
           const combinedSongs = [...backendSongs];
@@ -296,10 +301,10 @@ export function MusicProvider({ children }) {
 
   useEffect(() => {
     if (token) {
-      axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+      api.defaults.headers.common.Authorization = `Bearer ${token}`;
       const fetchProfile = async () => {
         try {
-          const response = await axios.get("/api/auth/profile");
+          const response = await api.get("/auth/profile");
           setUser(response.data);
           setAuthError("");
         } catch {
@@ -309,7 +314,7 @@ export function MusicProvider({ children }) {
       };
       fetchProfile();
     } else {
-      delete axios.defaults.headers.common.Authorization;
+      delete api.defaults.headers.common.Authorization;
     }
   }, [token]);
 
@@ -425,7 +430,7 @@ export function MusicProvider({ children }) {
 
   const loginUser = async (email, password) => {
     try {
-      const response = await axios.post("/api/auth/login", {
+      const response = await api.post("/auth/login", {
         email: email.trim().toLowerCase(),
         password,
       });
@@ -447,7 +452,7 @@ export function MusicProvider({ children }) {
 
   const registerUser = async (name, email, password) => {
     try {
-      const response = await axios.post("/api/auth/register", {
+      const response = await api.post("/auth/register", {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         password,
@@ -481,8 +486,8 @@ export function MusicProvider({ children }) {
     }
 
     try {
-      await axios.patch(
-        "/api/auth/profile/password",
+      await api.patch(
+        "/auth/profile/password",
         { currentPassword, newPassword },
         { headers: { Authorization: `Bearer ${token}` } },
       );
@@ -496,7 +501,7 @@ export function MusicProvider({ children }) {
 
   const toggleLike = async (songId) => {
     try {
-      const response = await axios.patch(`/api/songs/${songId}/like`);
+      const response = await api.patch(`/songs/${songId}/like`);
       setSongs((previous) => previous.map((song) => (song._id === songId ? response.data : song)));
     } catch (error) {
       setSongs((previous) =>
@@ -515,30 +520,34 @@ export function MusicProvider({ children }) {
   const addComment = async (songId, text) => {
     if (!text.trim()) return null;
     try {
-      const response = await axios.post(`/api/songs/${songId}/comments`, {
+      const response = await api.post(`/songs/${songId}/comments`, {
         text,
         user: "Guest",
       });
       setSongs((previous) => previous.map((song) => (song._id === songId ? response.data : song)));
+      if (currentSong?._id === songId) {
+        setCurrentSong(response.data);
+      }
       return response.data;
     } catch {
+      const optimisticComment = {
+        user: "Guest",
+        text,
+        createdAt: new Date().toISOString(),
+      };
       setSongs((previous) =>
         previous.map((song) =>
           song._id === songId
             ? {
                 ...song,
-                comments: [
-                  ...(song.comments || []),
-                  {
-                    user: "Guest",
-                    text,
-                    createdAt: new Date().toISOString(),
-                  },
-                ],
+                comments: [...(song.comments || []), optimisticComment],
               }
             : song,
         ),
       );
+      if (currentSong?._id === songId) {
+        setCurrentSong((previous) => previous ? { ...previous, comments: [...(previous.comments || []), optimisticComment] } : previous);
+      }
       return null;
     }
   };
