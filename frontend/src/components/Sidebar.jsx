@@ -17,7 +17,7 @@ export default function Sidebar() {
   return (
     <div className="w-64 bg-slate-900 p-5">
       <h1 className="text-3xl font-bold text-green-500 mb-10">
-        Musicify
+        Musicify UI
       </h1>
 
       <div className="space-y-4">

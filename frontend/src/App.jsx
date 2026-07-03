@@ -4,6 +4,8 @@ import Sidebar from "./components/Sidebar";
 import Navbar from "./components/Navbar";
 import MobileBottomNav from "./components/MobileBottomNav";
 import MusicPlayer from "./components/MusicPlayer";
+import DetailedPlayer from "./components/DetailedPlayer";
+import BottomBarPlayer from "./components/BottomBarPlayer";
 import Home from "./pages/Home";
 import Search from "./pages/Search";
 import Playlist from "./pages/Playlist";
@@ -11,6 +13,7 @@ import Player from "./pages/Player";
 import Profile from "./pages/Profile";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import MusicifyUI from "./pages/MusicifyUI";
 
 export default function App() {
   return (
@@ -25,9 +28,10 @@ export default function App() {
             <div className="flex-1">
               <Navbar />
 
-              <main className="px-4 py-6 lg:px-8 lg:py-8">
+              <main className="px-4 py-6 lg:px-8 lg:py-8 pb-32">
                 <Routes>
                   <Route path="/" element={<Home />} />
+                  <Route path="/musicify" element={<MusicifyUI />} />
                   <Route path="/search" element={<Search />} />
                   <Route path="/playlists" element={<Playlist />} />
                   <Route path="/player" element={<Player />} />
@@ -44,6 +48,14 @@ export default function App() {
             <MobileBottomNav />
           </div>
 
+          {/* Desktop fixed detailed player */}
+          <div className="fixed left-6 right-6 bottom-6 z-50 hidden lg:block">
+            <div className="mx-auto max-w-6xl">
+              <BottomBarPlayer />
+            </div>
+          </div>
+
+          {/* Mobile player (keeps existing small player) */}
           <MusicPlayer />
         </div>
       </BrowserRouter>

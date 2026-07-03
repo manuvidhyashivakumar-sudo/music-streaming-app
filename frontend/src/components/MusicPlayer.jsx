@@ -72,14 +72,14 @@ export default function MusicPlayer() {
 
   if (!currentSong) {
     return (
-      <div className="w-full bg-slate-900 p-5 border-t border-slate-800 text-slate-400 lg:w-80 lg:border-l lg:border-t-0">
+      <div className="w-full lg:hidden bg-slate-900 p-5 border-t border-slate-800 text-slate-400 lg:w-80 lg:border-l lg:border-t-0">
         <p>No song selected. Play a track from Home or Search.</p>
       </div>
     );
   }
 
   return (
-    <div className="w-full bg-slate-900 p-5 border-t border-slate-800 text-slate-100 lg:w-80 lg:border-l lg:border-t-0">
+    <div className="w-full lg:hidden bg-slate-900 p-5 border-t border-slate-800 text-slate-100 lg:w-80 lg:border-l lg:border-t-0">
       <audio key={currentSong._id} ref={audioRef} src={currentSong.audioUrl} autoPlay={isPlaying} onEnded={handleEnded} />
 
       <div className="flex flex-col gap-4">
