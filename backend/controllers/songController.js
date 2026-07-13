@@ -213,8 +213,26 @@ const sampleSongs = [
   },
 ];
 
+let fallbackSongStore = sampleSongs.map((song, index) => ({ ...song, _id: String(index + 1) }));
+
+const getFallbackSongs = () => fallbackSongStore.map((song) => ({ ...song }));
+
+const isMongoAvailable = () => {
+  try {
+    return require("mongoose").connection.readyState === 1;
+  } catch {
+    return false;
+  }
+};
+
 exports.createSong = async (req, res) => {
   try {
+    if (!isMongoAvailable()) {
+      const newSong = { ...req.body, _id: `${Date.now()}` };
+      fallbackSongStore = [newSong, ...fallbackSongStore];
+      return res.status(201).json(newSong);
+    }
+
     const song = await Song.create(req.body);
     res.status(201).json(song);
   } catch (error) {
@@ -224,6 +242,17 @@ exports.createSong = async (req, res) => {
 
 exports.getSongs = async (req, res) => {
   try {
+    if (!isMongoAvailable()) {
+      const search = (req.query.search || "").toLowerCase();
+      const filtered = search
+        ? getFallbackSongs().filter((song) => {
+            const haystack = `${song.title} ${song.artist} ${song.album} ${song.genre}`.toLowerCase();
+            return haystack.includes(search);
+          })
+        : getFallbackSongs();
+      return res.json(filtered.slice(0, 20));
+    }
+
     const search = req.query.search || "";
     const query = search
       ? {
@@ -239,12 +268,20 @@ exports.getSongs = async (req, res) => {
     const songs = await Song.find(query).sort({ title: 1 }).limit(20);
     res.json(songs);
   } catch (error) {
-    res.status(500).json(error);
+    res.status(500).json(getFallbackSongs());
   }
 };
 
 exports.getSongById = async (req, res) => {
   try {
+    if (!isMongoAvailable()) {
+      const song = getFallbackSongs().find((item) => item._id === req.params.id || item.id === req.params.id);
+      if (!song) {
+        return res.status(404).json({ message: "Song not found" });
+      }
+      return res.json(song);
+    }
+
     const song = await Song.findById(req.params.id);
     if (!song) {
       return res.status(404).json({ message: "Song not found" });
@@ -257,6 +294,16 @@ exports.getSongById = async (req, res) => {
 
 exports.likeSong = async (req, res) => {
   try {
+    if (!isMongoAvailable()) {
+      const song = getFallbackSongs().find((item) => item._id === req.params.id || item.id === req.params.id);
+      if (!song) {
+        return res.status(404).json({ message: "Song not found" });
+      }
+      const updatedSong = { ...song, likes: (song.likes || 0) + 1 };
+      fallbackSongStore = fallbackSongStore.map((item) => (item._id === req.params.id || item.id === req.params.id ? updatedSong : item));
+      return res.json(updatedSong);
+    }
+
     const song = await Song.findByIdAndUpdate(
       req.params.id,
       { $inc: { likes: 1 } },
@@ -273,6 +320,26 @@ exports.likeSong = async (req, res) => {
 
 exports.addComment = async (req, res) => {
   try {
+    if (!isMongoAvailable()) {
+      const song = getFallbackSongs().find((item) => item._id === req.params.id || item.id === req.params.id);
+      if (!song) {
+        return res.status(404).json({ message: "Song not found" });
+      }
+      const updatedSong = {
+        ...song,
+        comments: [
+          ...(song.comments || []),
+          {
+            user: req.body.user || "Guest",
+            text: req.body.text,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      fallbackSongStore = fallbackSongStore.map((item) => (item._id === req.params.id || item.id === req.params.id ? updatedSong : item));
+      return res.json(updatedSong);
+    }
+
     const song = await Song.findById(req.params.id);
     if (!song) {
       return res.status(404).json({ message: "Song not found" });

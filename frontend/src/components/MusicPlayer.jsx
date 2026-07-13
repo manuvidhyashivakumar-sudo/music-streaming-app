@@ -79,7 +79,7 @@ export default function MusicPlayer() {
   }
 
   return (
-    <div className="w-full lg:hidden bg-slate-900 p-5 border-t border-slate-800 text-slate-100 lg:w-80 lg:border-l lg:border-t-0">
+    <div className="fixed inset-x-0 bottom-16 z-40 max-h-[78vh] overflow-y-auto border-t border-slate-800 bg-slate-900 p-5 text-slate-100 shadow-2xl shadow-black/40 lg:hidden lg:w-80 lg:border-l lg:border-t-0">
       <audio key={currentSong._id} ref={audioRef} src={currentSong.audioUrl} autoPlay={isPlaying} onEnded={handleEnded} />
 
       <div className="flex flex-col gap-4">

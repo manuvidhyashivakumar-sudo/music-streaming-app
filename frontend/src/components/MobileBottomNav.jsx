@@ -8,7 +8,7 @@ import {
 
 export default function MobileBottomNav() {
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-700 flex justify-around p-4 lg:hidden">
+    <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t border-slate-700 bg-slate-900 p-4 lg:hidden">
       <Link to="/" className="text-slate-300 hover:text-white">
         <FaHome size={22} />
       </Link>

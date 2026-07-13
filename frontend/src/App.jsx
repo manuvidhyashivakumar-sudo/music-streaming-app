@@ -28,7 +28,7 @@ export default function App() {
             <div className="flex-1">
               <Navbar />
 
-              <main className="px-4 py-6 lg:px-8 lg:py-8 pb-32">
+              <main className="px-4 py-6 pb-40 sm:pb-44 lg:px-8 lg:py-8 lg:pb-36">
                 <Routes>
                   <Route path="/" element={<Home />} />
                   <Route path="/musicify" element={<MusicifyUI />} />

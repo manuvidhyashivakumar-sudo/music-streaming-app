@@ -10,6 +10,8 @@ require("dotenv").config();
 
 const app = express();
 
+process.env.JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+
 app.use(cors());
 app.use(express.json());
 
@@ -29,9 +31,13 @@ app.use("/api/playlists", playlistRoutes);
 
 const startServer = async () => {
   try {
-    await connectDB();
-    await seedDefaultUser();
-    await seedSongs();
+    if (process.env.MONGO_URI) {
+      await connectDB();
+      await seedDefaultUser();
+      await seedSongs();
+    } else {
+      console.warn("MONGO_URI not set. Running in local fallback mode without MongoDB.");
+    }
   } catch (error) {
     console.warn("Database initialization skipped:", error.message);
   }

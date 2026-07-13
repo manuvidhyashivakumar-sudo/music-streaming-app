@@ -1,9 +1,25 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import axios from "axios";
 
+const getApiBaseUrl = () => {
+  const configured = import.meta.env.VITE_API_URL?.trim();
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "";
+  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(hostname);
+
+  if (configured && !configured.includes("localhost") && !configured.includes("127.0.0.1")) {
+    return configured.replace(/\/$/, "");
+  }
+
+  if (isLocalHost) {
+    return "/api";
+  }
+
+  return "https://music-streaming-app.onrender.com/api";
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "/api",
-  timeout: 8000,
+  baseURL: getApiBaseUrl(),
+  timeout: 12000,
 });
 
 const MusicContext = createContext();
@@ -245,40 +261,68 @@ export function MusicProvider({ children }) {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [authError, setAuthError] = useState("");
+  const [isLoadingSongs, setIsLoadingSongs] = useState(true);
+  const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(true);
   const audioRef = useRef(null);
 
-  useEffect(() => {
-    async function loadSongs() {
-      try {
-        const response = await api.get("/songs");
-        const backendSongs = Array.isArray(response.data) ? response.data : [];
-        if (backendSongs.length) {
-          const combinedSongs = [...backendSongs];
-          const backendTitles = new Set(backendSongs.map((song) => song.title));
-          for (const fallbackSong of fallbackSongs) {
-            if (combinedSongs.length >= 20) break;
-            if (!backendTitles.has(fallbackSong.title)) {
-              combinedSongs.push({ ...fallbackSong, _id: fallbackSong._id });
-            }
-          }
-          const finalSongs = combinedSongs.slice(0, 20);
-          setSongs(finalSongs);
-          if (!currentSong) {
-            setCurrentSong(finalSongs[0]);
-          }
-          return;
-        }
-      } catch (error) {
-        console.warn("Unable to fetch songs from backend, using fallback data.", error.message);
-      }
+  const normalizeSong = (song) => ({
+    ...song,
+    _id: song._id || song.id,
+    comments: song.comments || [],
+  });
 
-      setSongs(fallbackSongs.slice(0, 20));
-      if (!currentSong) {
-        setCurrentSong(fallbackSongs[0]);
+  const normalizePlaylist = (playlist) => ({
+    id: playlist._id || playlist.id,
+    title: playlist.title,
+    songs: (playlist.songs || []).map((song) => (typeof song === "string" ? song : song._id || song.id)),
+  });
+
+  const loadSongs = useCallback(async (query = "") => {
+    setIsLoadingSongs(true);
+    try {
+      const response = await api.get("/songs", { params: { search: query } });
+      const backendSongs = Array.isArray(response.data) ? response.data : [];
+      const normalizedSongs = backendSongs.map(normalizeSong);
+      if (normalizedSongs.length) {
+        const combinedSongs = [...normalizedSongs];
+        const backendTitles = new Set(normalizedSongs.map((song) => song.title));
+        for (const fallbackSong of fallbackSongs) {
+          if (combinedSongs.length >= 20) break;
+          if (!backendTitles.has(fallbackSong.title)) {
+            combinedSongs.push({ ...fallbackSong, _id: fallbackSong._id });
+          }
+        }
+        const finalSongs = combinedSongs.slice(0, 20);
+        setSongs(finalSongs);
+        setCurrentSong((current) => (current && finalSongs.some((song) => song._id === current._id) ? current : finalSongs[0]));
+        setIsLoadingSongs(false);
+        return;
       }
+    } catch (error) {
+      console.warn("Unable to fetch songs from backend, using fallback data.", error.message);
     }
 
-    loadSongs();
+    setSongs(fallbackSongs.slice(0, 20));
+    setCurrentSong((current) => (current && fallbackSongs.some((song) => song._id === current._id) ? current : fallbackSongs[0]));
+    setIsLoadingSongs(false);
+  }, []);
+
+  const loadPlaylists = useCallback(async () => {
+    setIsLoadingPlaylists(true);
+    try {
+      const response = await api.get("/playlists");
+      const backendPlaylists = Array.isArray(response.data) ? response.data : [];
+      const normalizedPlaylists = backendPlaylists.map(normalizePlaylist);
+      if (normalizedPlaylists.length) {
+        setPlaylists(normalizedPlaylists);
+        setSelectedPlaylistId((current) => current || normalizedPlaylists[0]?.id || "default");
+        setIsLoadingPlaylists(false);
+        return;
+      }
+    } catch (error) {
+      console.warn("Unable to fetch playlists from backend.", error.message);
+    }
+
     const savedPlaylists = localStorage.getItem("musicify-playlists");
     if (savedPlaylists) {
       const parsed = JSON.parse(savedPlaylists);
@@ -288,6 +332,12 @@ export function MusicProvider({ children }) {
       setPlaylists([{ id: "default", title: "Favorites", songs: [] }]);
       setSelectedPlaylistId("default");
     }
+    setIsLoadingPlaylists(false);
+  }, []);
+
+  useEffect(() => {
+    loadSongs("");
+    loadPlaylists();
 
     const savedToken = localStorage.getItem("musicify-token");
     const savedUser = localStorage.getItem("musicify-current-user");
@@ -297,7 +347,15 @@ export function MusicProvider({ children }) {
     if (savedUser) {
       setUser(JSON.parse(savedUser));
     }
-  }, []);
+  }, [loadPlaylists, loadSongs]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadSongs(searchTerm);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [loadSongs, searchTerm]);
 
   useEffect(() => {
     if (token) {
@@ -552,41 +610,58 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const createPlaylist = (title) => {
+  const createPlaylist = async (title) => {
     const trimmed = title.trim();
-    if (!trimmed) return;
-    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
-    setPlaylists((previous) => [...previous, { id, title: trimmed, songs: [] }]);
-    setSelectedPlaylistId(id);
+    if (!trimmed) return null;
+
+    try {
+      const response = await api.post("/playlists", { title: trimmed });
+      const createdPlaylist = normalizePlaylist(response.data);
+      setPlaylists((previous) => [...previous, createdPlaylist]);
+      setSelectedPlaylistId(createdPlaylist.id);
+      return createdPlaylist;
+    } catch (error) {
+      const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+      const fallbackPlaylist = { id, title: trimmed, songs: [] };
+      setPlaylists((previous) => [...previous, fallbackPlaylist]);
+      setSelectedPlaylistId(id);
+      console.warn("Unable to save playlist to backend.", error.message);
+      return fallbackPlaylist;
+    }
   };
 
-  const addToPlaylist = (songId, playlistId) => {
+  const addToPlaylist = async (songId, playlistId) => {
+    const playlist = playlists.find((entry) => entry.id === playlistId);
+    if (!playlist || playlist.songs.includes(songId)) return;
+
+    try {
+      await api.patch(`/playlists/${playlistId}/add`, { songId });
+    } catch (error) {
+      console.warn("Unable to sync playlist with backend.", error.message);
+    }
+
     setPlaylists((previous) =>
-      previous.map((playlist) => {
-        if (playlist.id !== playlistId) {
-          return playlist;
-        }
-
-        if (playlist.songs.includes(songId)) {
-          return playlist;
-        }
-
-        return {
-          ...playlist,
-          songs: [...playlist.songs, songId],
-        };
+      previous.map((entry) => {
+        if (entry.id !== playlistId) return entry;
+        return { ...entry, songs: [...entry.songs, songId] };
       }),
     );
   };
 
-  const removeFromPlaylist = (songId, playlistId) => {
+  const removeFromPlaylist = async (songId, playlistId) => {
+    try {
+      await api.patch(`/playlists/${playlistId}/remove`, { songId });
+    } catch (error) {
+      console.warn("Unable to sync playlist removal with backend.", error.message);
+    }
+
     setPlaylists((previous) =>
-      previous.map((playlist) =>
-        playlist.id !== playlistId
-          ? playlist
+      previous.map((entry) =>
+        entry.id !== playlistId
+          ? entry
           : {
-              ...playlist,
-              songs: playlist.songs.filter((id) => id !== songId),
+              ...entry,
+              songs: entry.songs.filter((id) => id !== songId),
             },
       ),
     );
@@ -622,6 +697,8 @@ export function MusicProvider({ children }) {
         token,
         authError,
         setAuthError,
+        isLoadingSongs,
+        isLoadingPlaylists,
         playSong,
         setIsPlaying,
         nextTrack,
