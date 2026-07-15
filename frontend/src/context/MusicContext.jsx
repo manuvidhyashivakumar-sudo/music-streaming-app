@@ -7,7 +7,11 @@ const getApiBaseUrl = () => {
   const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(hostname);
 
   if (configured && !configured.includes("localhost") && !configured.includes("127.0.0.1")) {
-    return configured.replace(/\/$/, "");
+    const cleanedConfigured = configured.replace(/\/$/, "");
+    if (/^https?:\/\//i.test(cleanedConfigured) && !/\/api(\/|$)/i.test(cleanedConfigured)) {
+      return `${cleanedConfigured}/api`;
+    }
+    return cleanedConfigured;
   }
 
   if (isLocalHost) {
@@ -338,6 +342,37 @@ export function MusicProvider({ children }) {
     return payload;
   };
 
+  const findNestedMatch = (value, predicate, depth = 0, seen = new Set()) => {
+    if (depth > 5 || value == null) return null;
+
+    if (typeof value === "object") {
+      if (seen.has(value)) return null;
+      seen.add(value);
+    }
+
+    if (predicate(value)) return value;
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = findNestedMatch(item, predicate, depth + 1, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    if (typeof value === "object") {
+      for (const nested of Object.values(value)) {
+        const found = findNestedMatch(nested, predicate, depth + 1, seen);
+        if (found) return found;
+      }
+    }
+
+    return null;
+  };
+
+  const looksLikeJwt = (value) =>
+    typeof value === "string" && value.split(".").length === 3 && value.length > 20;
+
   const extractTokenFromPayload = (payload, headers = {}) => {
     const authHeader =
       headers?.authorization ||
@@ -356,6 +391,12 @@ export function MusicProvider({ children }) {
       payload?.data?.accessToken ||
       payload?.data?.jwt ||
       payload?.auth?.token ||
+      findNestedMatch(
+        payload,
+        (candidate) =>
+          typeof candidate === "string" &&
+          (looksLikeJwt(candidate) || candidate.startsWith("eyJ")),
+      ) ||
       bearerToken ||
       ""
     );
@@ -370,6 +411,15 @@ export function MusicProvider({ children }) {
       payload?.data?.account ||
       payload?.data?.profile ||
       payload?.auth?.user ||
+      findNestedMatch(
+        payload,
+        (candidate) =>
+          candidate &&
+          typeof candidate === "object" &&
+          !Array.isArray(candidate) &&
+          (typeof candidate.email === "string" || typeof candidate.name === "string") &&
+          (candidate.id || candidate._id || candidate.email),
+      ) ||
       null
     );
   };
@@ -739,9 +789,8 @@ export function MusicProvider({ children }) {
       }
 
       if (!nextToken || !normalizedUser) {
-        throw new Error(
-          "Registration succeeded but session could not be created from server response. Check deployed backend API URL and CORS.",
-        );
+        setAuthError("Registration successful. Please login to continue.");
+        return "requires-login";
       }
 
       setToken(nextToken);

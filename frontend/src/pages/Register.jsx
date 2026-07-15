@@ -24,8 +24,14 @@ export default function Register() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const success = await registerUser(name, email, password);
-    if (!success) return;
+    const result = await registerUser(name, email, password);
+    if (!result) return;
+
+    if (result === "requires-login") {
+      navigate("/login", { state: { email: email.trim().toLowerCase() } });
+      return;
+    }
+
     setAuthError("");
     navigate("/");
   };

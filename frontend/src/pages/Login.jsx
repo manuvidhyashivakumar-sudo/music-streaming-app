@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useMusic } from "../context/MusicContext";
 
 export default function Login() {
   const { loginUser, user, token, isAuthReady, authError, setAuthError } = useMusic();
-  const [email, setEmail] = useState("");
+  const location = useLocation();
+  const [email, setEmail] = useState(location.state?.email || "");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
 
