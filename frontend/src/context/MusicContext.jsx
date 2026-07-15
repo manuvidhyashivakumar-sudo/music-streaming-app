@@ -378,6 +378,7 @@ export function MusicProvider({ children }) {
       headers?.authorization ||
       headers?.Authorization ||
       headers?.Authorization?.toString?.();
+    const tokenHeader = headers?.["x-auth-token"] || headers?.["X-Auth-Token"] || "";
 
     const bearerToken = typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
       ? authHeader.slice(7).trim()
@@ -397,6 +398,7 @@ export function MusicProvider({ children }) {
           typeof candidate === "string" &&
           (looksLikeJwt(candidate) || candidate.startsWith("eyJ")),
       ) ||
+      tokenHeader ||
       bearerToken ||
       ""
     );

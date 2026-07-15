@@ -60,6 +60,8 @@ exports.register = async (req, res) => {
       fallbackUsers.push(newUser);
 
       const token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+      res.set("Authorization", `Bearer ${token}`);
+      res.set("X-Auth-Token", token);
       return res.status(201).json({
         user: { id: newUser.id, name: newUser.name, email: newUser.email },
         token,
@@ -83,6 +85,8 @@ exports.register = async (req, res) => {
     });
 
     const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.set("Authorization", `Bearer ${token}`);
+    res.set("X-Auth-Token", token);
     res.status(201).json({
       user: {
         id: newUser._id,
@@ -117,6 +121,8 @@ exports.login = async (req, res) => {
       }
 
       const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+      res.set("Authorization", `Bearer ${token}`);
+      res.set("X-Auth-Token", token);
       return res.json({
         user: { id: user.id, name: user.name, email: user.email },
         token,
@@ -139,6 +145,8 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.set("Authorization", `Bearer ${token}`);
+    res.set("X-Auth-Token", token);
     res.json({
       user: {
         id: user._id,

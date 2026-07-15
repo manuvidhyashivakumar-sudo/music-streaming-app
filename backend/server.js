@@ -12,7 +12,45 @@ const app = express();
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  process.env.FRONTEND_URL,
+  process.env.NETLIFY_URL,
+]
+  .filter(Boolean)
+  .map((origin) => origin.replace(/\/$/, ""));
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow non-browser clients and same-origin requests without an Origin header.
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = origin.replace(/\/$/, "");
+      let isNetlifyOrigin = false;
+      try {
+        const parsed = new URL(normalizedOrigin);
+        isNetlifyOrigin = /\.netlify\.app$/i.test(parsed.hostname);
+      } catch {
+        isNetlifyOrigin = false;
+      }
+
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+      if (isNetlifyOrigin) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS origin not allowed"));
+    },
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    exposedHeaders: ["Authorization", "X-Auth-Token"],
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
