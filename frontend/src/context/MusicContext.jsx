@@ -24,6 +24,7 @@ const getApiBaseUrl = () => {
 const api = axios.create({
   baseURL: getApiBaseUrl(),
   timeout: 12000,
+  withCredentials: true,
 });
 
 const MusicContext = createContext();
@@ -767,10 +768,24 @@ export function MusicProvider({ children }) {
         }
       }
 
+      if (!nextToken && !normalizedUser) {
+        try {
+          const profileResponse = await api.get("/auth/profile");
+          normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
+        } catch {
+          // Continue to unified validation below.
+        }
+      }
+
+      // Accept login when user payload is present even if token is absent (cookie/session or variant API responses).
+      if (!nextToken && normalizedUser) {
+        setUser(normalizedUser);
+        setAuthError("");
+        return true;
+      }
+
       if (!nextToken || !normalizedUser) {
-        throw new Error(
-          "Login succeeded but the auth response from server was incomplete. Check deployed backend API URL and CORS.",
-        );
+        throw new Error("Login failed. Please verify your credentials and backend deployment settings.");
       }
 
       setToken(nextToken);
