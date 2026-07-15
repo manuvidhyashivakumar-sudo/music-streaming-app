@@ -24,6 +24,22 @@ const api = axios.create({
 
 const MusicContext = createContext();
 
+const normalizeUser = (account) => {
+  if (!account || typeof account !== "object") return null;
+
+  const id = account._id || account.id || "";
+  const name = typeof account.name === "string" ? account.name.trim() : "";
+  const email = typeof account.email === "string" ? account.email.trim().toLowerCase() : "";
+
+  if (!name && !email) return null;
+
+  return {
+    id,
+    name: name || "Guest",
+    email,
+  };
+};
+
 const fallbackSongs = [
   {
     _id: "1",
@@ -260,29 +276,53 @@ export function MusicProvider({ children }) {
   const [selectedGenre, setSelectedGenre] = useState("");
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
   const [isLoadingSongs, setIsLoadingSongs] = useState(true);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(true);
   const audioRef = useRef(null);
 
-  const normalizeSong = (song) => ({
-    ...song,
-    _id: song._id || song.id,
-    comments: song.comments || [],
-  });
+  const normalizeSong = (song) => {
+    if (!song || typeof song !== "object") return null;
 
-  const normalizePlaylist = (playlist) => ({
-    id: playlist._id || playlist.id,
-    title: playlist.title,
-    songs: (playlist.songs || []).map((song) => (typeof song === "string" ? song : song._id || song.id)),
-  });
+    return {
+      ...song,
+      _id: song._id || song.id || "",
+      title: song.title || "Untitled track",
+      artist: song.artist || "Unknown artist",
+      likes: typeof song.likes === "number" ? song.likes : 0,
+      comments: Array.isArray(song.comments) ? song.comments : [],
+    };
+  };
+
+  const getSongIdentifier = (songOrId) => {
+    if (songOrId && typeof songOrId === "object") {
+      return String(songOrId._id || songOrId.id || songOrId.title || "");
+    }
+    return String(songOrId || "");
+  };
+
+  const normalizePlaylist = (playlist) => {
+    if (!playlist || typeof playlist !== "object") {
+      return { id: `playlist-${Date.now()}`, title: "Untitled playlist", songs: [] };
+    }
+
+    return {
+      id: playlist._id || playlist.id || `playlist-${Date.now()}`,
+      title: playlist.title || playlist.name || "Untitled playlist",
+      songs: (playlist.songs || [])
+        .map((song) => (typeof song === "string" ? song : song?._id || song?.id || song?.songId))
+        .map((songId) => (songId ? String(songId) : ""))
+        .filter(Boolean),
+    };
+  };
 
   const loadSongs = useCallback(async (query = "") => {
     setIsLoadingSongs(true);
     try {
       const response = await api.get("/songs", { params: { search: query } });
-      const backendSongs = Array.isArray(response.data) ? response.data : [];
-      const normalizedSongs = backendSongs.map(normalizeSong);
+      const backendSongs = Array.isArray(response.data) ? response.data : [response.data].filter(Boolean);
+      const normalizedSongs = backendSongs.map(normalizeSong).filter(Boolean);
       if (normalizedSongs.length) {
         const combinedSongs = [...normalizedSongs];
         const backendTitles = new Set(normalizedSongs.map((song) => song.title));
@@ -311,8 +351,8 @@ export function MusicProvider({ children }) {
     setIsLoadingPlaylists(true);
     try {
       const response = await api.get("/playlists");
-      const backendPlaylists = Array.isArray(response.data) ? response.data : [];
-      const normalizedPlaylists = backendPlaylists.map(normalizePlaylist);
+      const backendPlaylists = Array.isArray(response.data) ? response.data : [response.data].filter(Boolean);
+      const normalizedPlaylists = backendPlaylists.map(normalizePlaylist).filter(Boolean);
       if (normalizedPlaylists.length) {
         setPlaylists(normalizedPlaylists);
         setSelectedPlaylistId((current) => current || normalizedPlaylists[0]?.id || "default");
@@ -325,9 +365,16 @@ export function MusicProvider({ children }) {
 
     const savedPlaylists = localStorage.getItem("musicify-playlists");
     if (savedPlaylists) {
-      const parsed = JSON.parse(savedPlaylists);
-      setPlaylists(parsed);
-      setSelectedPlaylistId(parsed[0]?.id ?? "default");
+      try {
+        const parsed = JSON.parse(savedPlaylists);
+        const normalizedSavedPlaylists = Array.isArray(parsed) ? parsed.map(normalizePlaylist).filter(Boolean) : [];
+        const fallbackPlaylists = normalizedSavedPlaylists.length ? normalizedSavedPlaylists : [{ id: "default", title: "Favorites", songs: [] }];
+        setPlaylists(fallbackPlaylists);
+        setSelectedPlaylistId(fallbackPlaylists[0]?.id ?? "default");
+      } catch {
+        setPlaylists([{ id: "default", title: "Favorites", songs: [] }]);
+        setSelectedPlaylistId("default");
+      }
     } else {
       setPlaylists([{ id: "default", title: "Favorites", songs: [] }]);
       setSelectedPlaylistId("default");
@@ -341,12 +388,19 @@ export function MusicProvider({ children }) {
 
     const savedToken = localStorage.getItem("musicify-token");
     const savedUser = localStorage.getItem("musicify-current-user");
-    if (savedToken) {
+    if (savedToken && savedToken !== "undefined" && savedToken !== "null") {
       setToken(savedToken);
+    } else {
+      localStorage.removeItem("musicify-token");
     }
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    if (savedUser && savedUser !== "undefined") {
+      try {
+        setUser(normalizeUser(JSON.parse(savedUser)));
+      } catch {
+        localStorage.removeItem("musicify-current-user");
+      }
     }
+    setIsAuthReady(!(savedToken && savedToken !== "undefined" && savedToken !== "null"));
   }, [loadPlaylists, loadSongs]);
 
   useEffect(() => {
@@ -359,20 +413,44 @@ export function MusicProvider({ children }) {
 
   useEffect(() => {
     if (token) {
+      setIsAuthReady(false);
       api.defaults.headers.common.Authorization = `Bearer ${token}`;
       const fetchProfile = async () => {
         try {
           const response = await api.get("/auth/profile");
-          setUser(response.data);
-          setAuthError("");
+          const profileUser = normalizeUser(response.data?.user || response.data);
+          if (profileUser) {
+            setUser(profileUser);
+            setAuthError("");
+          }
         } catch {
-          setToken(null);
-          setUser(null);
+          const savedUser = localStorage.getItem("musicify-current-user");
+          if (savedUser && savedUser !== "undefined") {
+            try {
+              const parsed = normalizeUser(JSON.parse(savedUser));
+              if (parsed) {
+                setUser(parsed);
+                setAuthError("");
+              } else {
+                setToken(null);
+                setUser(null);
+              }
+            } catch {
+              setToken(null);
+              setUser(null);
+            }
+          } else {
+            setToken(null);
+            setUser(null);
+          }
+        } finally {
+          setIsAuthReady(true);
         }
       };
       fetchProfile();
     } else {
       delete api.defaults.headers.common.Authorization;
+      setIsAuthReady(true);
     }
   }, [token]);
 
@@ -383,11 +461,17 @@ export function MusicProvider({ children }) {
   }, [songs, currentSong]);
 
   useEffect(() => {
+    if (isLoadingPlaylists) return;
     localStorage.setItem("musicify-playlists", JSON.stringify(playlists));
-  }, [playlists]);
+  }, [isLoadingPlaylists, playlists]);
 
   useEffect(() => {
-    localStorage.setItem("musicify-current-user", JSON.stringify(user));
+    const normalizedUser = normalizeUser(user);
+    if (normalizedUser) {
+      localStorage.setItem("musicify-current-user", JSON.stringify(normalizedUser));
+    } else {
+      localStorage.removeItem("musicify-current-user");
+    }
   }, [user]);
 
   useEffect(() => {
@@ -557,21 +641,41 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const toggleLike = async (songId) => {
+  const toggleLike = async (songOrId) => {
+    const normalizedSongId = getSongIdentifier(songOrId);
+    if (!normalizedSongId) return;
+
+    const currentSong = songs.find((entry) => getSongIdentifier(entry) === normalizedSongId);
+    const optimisticLikeCount = (currentSong?.likes || 0) + 1;
+
+    setSongs((previous) =>
+      previous.map((song) =>
+        getSongIdentifier(song) === normalizedSongId
+          ? {
+              ...song,
+              likes: optimisticLikeCount,
+            }
+          : song,
+      ),
+    );
+
+    if (currentSong?._id === normalizedSongId) {
+      setCurrentSong((previous) => (previous ? { ...previous, likes: optimisticLikeCount } : previous));
+    }
+
     try {
-      const response = await api.patch(`/songs/${songId}/like`);
-      setSongs((previous) => previous.map((song) => (song._id === songId ? response.data : song)));
+      const response = await api.patch(`/songs/${normalizedSongId}/like`);
+      const updatedSong = normalizeSong(response.data);
+      if (updatedSong) {
+        setSongs((previous) =>
+          previous.map((song) => (getSongIdentifier(song) === normalizedSongId ? { ...song, ...updatedSong, likes: typeof updatedSong.likes === "number" ? updatedSong.likes : optimisticLikeCount } : song)),
+        );
+        if (currentSong?._id === normalizedSongId) {
+          setCurrentSong((previous) => (previous ? { ...previous, ...updatedSong } : previous));
+        }
+      }
     } catch (error) {
-      setSongs((previous) =>
-        previous.map((song) =>
-          song._id === songId
-            ? {
-                ...song,
-                likes: song.likes + 1,
-              }
-            : song,
-        ),
-      );
+      console.warn("Unable to sync like update.", error.message);
     }
   };
 
@@ -630,48 +734,64 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const addToPlaylist = async (songId, playlistId) => {
-    const playlist = playlists.find((entry) => entry.id === playlistId);
-    if (!playlist || playlist.songs.includes(songId)) return;
+  const addToPlaylist = async (songOrId, playlistId) => {
+    const normalizedSongId = getSongIdentifier(songOrId);
+    if (!normalizedSongId) return;
+
+    const fallbackPlaylistId = playlists[0]?.id || playlists[0]?._id;
+    const resolvedPlaylistId = playlistId || selectedPlaylistId || fallbackPlaylistId;
+    if (!resolvedPlaylistId) return;
+
+    const normalizedPlaylistId = String(resolvedPlaylistId);
+    const playlist = playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId);
+    if (!playlist || playlist.songs.some((id) => String(id) === normalizedSongId)) return;
 
     try {
-      await api.patch(`/playlists/${playlistId}/add`, { songId });
+      await api.patch(`/playlists/${normalizedPlaylistId}/add`, { songId: normalizedSongId });
     } catch (error) {
       console.warn("Unable to sync playlist with backend.", error.message);
     }
 
     setPlaylists((previous) =>
       previous.map((entry) => {
-        if (entry.id !== playlistId) return entry;
-        return { ...entry, songs: [...entry.songs, songId] };
+        if (String(entry.id || entry._id) !== normalizedPlaylistId) return entry;
+        return { ...entry, songs: [...new Set([...entry.songs.map(String), normalizedSongId])] };
       }),
     );
   };
 
   const removeFromPlaylist = async (songId, playlistId) => {
+    if (!songId || !playlistId) return;
+
+    const normalizedSongId = String(songId);
+    const normalizedPlaylistId = String(playlistId);
+
     try {
-      await api.patch(`/playlists/${playlistId}/remove`, { songId });
+      await api.patch(`/playlists/${normalizedPlaylistId}/remove`, { songId: normalizedSongId });
     } catch (error) {
       console.warn("Unable to sync playlist removal with backend.", error.message);
     }
 
     setPlaylists((previous) =>
       previous.map((entry) =>
-        entry.id !== playlistId
+        String(entry.id || entry._id) !== normalizedPlaylistId
           ? entry
           : {
               ...entry,
-              songs: entry.songs.filter((id) => id !== songId),
+              songs: entry.songs.filter((id) => String(id) !== normalizedSongId),
             },
       ),
     );
   };
 
-  const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) || playlists[0] || null;
+  const selectedPlaylist =
+    playlists.find((playlist) => String(playlist.id || playlist._id) === String(selectedPlaylistId)) || playlists[0] || null;
 
   const playlistSongs = useMemo(
     () =>
-      songs.filter((song) => selectedPlaylist?.songs.includes(song._id)),
+      songs.filter(
+        (song) => song && selectedPlaylist?.songs.some((songId) => String(songId) === getSongIdentifier(song)),
+      ),
     [songs, selectedPlaylist],
   );
 
@@ -695,6 +815,7 @@ export function MusicProvider({ children }) {
         audioRef,
         user,
         token,
+        isAuthReady,
         authError,
         setAuthError,
         isLoadingSongs,

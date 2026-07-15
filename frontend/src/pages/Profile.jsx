@@ -3,10 +3,20 @@ import { useNavigate } from "react-router-dom";
 import { useMusic } from "../context/MusicContext";
 
 export default function Profile() {
-  const { user, logoutUser, updatePassword, authError, setAuthError } = useMusic();
+  const { user, token, isAuthReady, logoutUser, updatePassword, authError, setAuthError } = useMusic();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const navigate = useNavigate();
+
+  if (!isAuthReady && token) {
+    return (
+      <div className="mx-auto max-w-2xl rounded-3xl border border-slate-800 bg-slate-900 p-8 text-center">
+        <p className="text-sm uppercase tracking-[0.3em] text-green-400">Profile</p>
+        <h1 className="mt-4 text-3xl font-bold text-white">Loading your profile...</h1>
+        <p className="mt-4 text-slate-400">Restoring your session details.</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -34,9 +44,9 @@ export default function Profile() {
     );
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    const success = updatePassword(currentPassword, newPassword);
+    const success = await updatePassword(currentPassword, newPassword);
     if (!success) return;
     setCurrentPassword("");
     setNewPassword("");

@@ -39,9 +39,9 @@ export default function Navbar() {
             className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800"
           >
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-slate-300">
-              {user ? user.name.charAt(0).toUpperCase() : "G"}
+              {user?.name ? user.name.charAt(0).toUpperCase() : "G"}
             </span>
-            <span>{user ? user.name : "Guest"}</span>
+            <span>{user?.name || user?.email || "Guest"}</span>
           </button>
         </div>
       </div>

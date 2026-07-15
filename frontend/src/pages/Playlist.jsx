@@ -39,20 +39,24 @@ export default function Playlist() {
         <div className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-xl font-bold text-white">Your playlists</h2>
           <div className="space-y-3">
-            {playlists.map((playlist) => (
-              <button
-                key={playlist.id}
-                onClick={() => setSelectedPlaylistId(playlist.id)}
-                className={`w-full rounded-3xl border px-4 py-4 text-left transition ${
-                  selectedPlaylist?.id === playlist.id
-                    ? "border-green-500 bg-slate-950"
-                    : "border-slate-800 bg-slate-900 hover:border-slate-700"
-                }`}
-              >
-                <p className="font-semibold text-white">{playlist.title}</p>
-                <p className="text-sm text-slate-400">{playlist.songs.length} songs</p>
-              </button>
-            ))}
+            {playlists.length ? (
+              playlists.map((playlist) => (
+                <button
+                  key={playlist.id}
+                  onClick={() => setSelectedPlaylistId(playlist.id)}
+                  className={`w-full rounded-3xl border px-4 py-4 text-left transition ${
+                    selectedPlaylist?.id === playlist.id
+                      ? "border-green-500 bg-slate-950"
+                      : "border-slate-800 bg-slate-900 hover:border-slate-700"
+                  }`}
+                >
+                  <p className="font-semibold text-white">{playlist.title || "Untitled playlist"}</p>
+                  <p className="text-sm text-slate-400">{playlist.songs?.length || 0} songs</p>
+                </button>
+              ))
+            ) : (
+              <p className="rounded-3xl border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">No playlists yet. Create one to get started.</p>
+            )}
           </div>
         </div>
 

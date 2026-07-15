@@ -28,7 +28,7 @@ export default function Player() {
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <button onClick={() => toggleLike(currentSong._id)} className="rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400">
+            <button onClick={() => toggleLike(currentSong)} className="rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400">
               Like ({currentSong.likes})
             </button>
             <button onClick={() => playSong(currentSong)} className="rounded-3xl border border-slate-800 bg-slate-950 px-6 py-3 text-sm text-slate-200 transition hover:bg-slate-800">
@@ -67,7 +67,7 @@ export default function Player() {
         <InteractionPanel
           item={currentSong}
           label="track"
-          onLike={() => toggleLike(currentSong._id)}
+          onLike={() => toggleLike(currentSong)}
           onComment={(text) => addComment(currentSong._id, text)}
         />
       </section>
