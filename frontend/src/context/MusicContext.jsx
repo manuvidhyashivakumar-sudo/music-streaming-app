@@ -338,6 +338,42 @@ export function MusicProvider({ children }) {
     return payload;
   };
 
+  const extractTokenFromPayload = (payload, headers = {}) => {
+    const authHeader =
+      headers?.authorization ||
+      headers?.Authorization ||
+      headers?.Authorization?.toString?.();
+
+    const bearerToken = typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+
+    return (
+      payload?.token ||
+      payload?.accessToken ||
+      payload?.jwt ||
+      payload?.data?.token ||
+      payload?.data?.accessToken ||
+      payload?.data?.jwt ||
+      payload?.auth?.token ||
+      bearerToken ||
+      ""
+    );
+  };
+
+  const extractUserFromPayload = (payload) => {
+    return (
+      payload?.user ||
+      payload?.account ||
+      payload?.profile ||
+      payload?.data?.user ||
+      payload?.data?.account ||
+      payload?.data?.profile ||
+      payload?.auth?.user ||
+      null
+    );
+  };
+
   const loadSongs = useCallback(async (query = "") => {
     setIsLoadingSongs(true);
     try {
@@ -629,11 +665,24 @@ export function MusicProvider({ children }) {
       });
 
       const authPayload = extractAuthPayload(response.data);
-      const normalizedUser = normalizeUser(authPayload?.user || authPayload);
-      const nextToken = authPayload?.token;
+      const nextToken = extractTokenFromPayload(authPayload, response.headers);
+      let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
+
+      if (nextToken && !normalizedUser) {
+        try {
+          const profileResponse = await api.get("/auth/profile", {
+            headers: { Authorization: `Bearer ${nextToken}` },
+          });
+          normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
+        } catch {
+          // Continue to unified validation below.
+        }
+      }
 
       if (!nextToken || !normalizedUser) {
-        throw new Error("Invalid auth response from server.");
+        throw new Error(
+          "Login succeeded but the auth response from server was incomplete. Check deployed backend API URL and CORS.",
+        );
       }
 
       setToken(nextToken);
@@ -660,11 +709,39 @@ export function MusicProvider({ children }) {
       });
 
       const authPayload = extractAuthPayload(response.data);
-      const normalizedUser = normalizeUser(authPayload?.user || authPayload);
-      const nextToken = authPayload?.token;
+      let nextToken = extractTokenFromPayload(authPayload, response.headers);
+      let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
+
+      // Some deployed backends register successfully but return no token. Auto-login to complete the session.
+      if (!nextToken) {
+        try {
+          const loginResponse = await api.post("/auth/login", {
+            email: email.trim().toLowerCase(),
+            password,
+          });
+          const loginPayload = extractAuthPayload(loginResponse.data);
+          nextToken = extractTokenFromPayload(loginPayload, loginResponse.headers);
+          normalizedUser = normalizeUser(extractUserFromPayload(loginPayload) || loginPayload || normalizedUser);
+        } catch {
+          // Fall through to validation and show backend-provided message when available.
+        }
+      }
+
+      if (nextToken && !normalizedUser) {
+        try {
+          const profileResponse = await api.get("/auth/profile", {
+            headers: { Authorization: `Bearer ${nextToken}` },
+          });
+          normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
+        } catch {
+          // Continue to unified validation below.
+        }
+      }
 
       if (!nextToken || !normalizedUser) {
-        throw new Error("Invalid auth response from server.");
+        throw new Error(
+          "Registration succeeded but session could not be created from server response. Check deployed backend API URL and CORS.",
+        );
       }
 
       setToken(nextToken);
