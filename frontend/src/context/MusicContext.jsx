@@ -330,6 +330,14 @@ export function MusicProvider({ children }) {
     return payload.playlist || payload.data?.playlist || payload.data || payload;
   };
 
+  const extractAuthPayload = (payload) => {
+    if (!payload) return null;
+    if (payload.user && payload.token) return payload;
+    if (payload.data?.user && payload.data?.token) return payload.data;
+    if (payload.data?.data?.user && payload.data?.data?.token) return payload.data.data;
+    return payload;
+  };
+
   const loadSongs = useCallback(async (query = "") => {
     setIsLoadingSongs(true);
     try {
@@ -443,7 +451,14 @@ export function MusicProvider({ children }) {
             setUser(profileUser);
             setAuthError("");
           }
-        } catch {
+        } catch (error) {
+          const status = error.response?.status;
+          // Keep the current authenticated session when profile fetch fails due transient network/CORS errors.
+          if (!status || (status !== 401 && status !== 403)) {
+            setAuthError("");
+            return;
+          }
+
           const savedUser = localStorage.getItem("musicify-current-user");
           if (savedUser && savedUser !== "undefined") {
             try {
@@ -613,8 +628,16 @@ export function MusicProvider({ children }) {
         password,
       });
 
-      setToken(response.data.token);
-      setUser(response.data.user);
+      const authPayload = extractAuthPayload(response.data);
+      const normalizedUser = normalizeUser(authPayload?.user || authPayload);
+      const nextToken = authPayload?.token;
+
+      if (!nextToken || !normalizedUser) {
+        throw new Error("Invalid auth response from server.");
+      }
+
+      setToken(nextToken);
+      setUser(normalizedUser);
       setAuthError("");
       return true;
     } catch (error) {
@@ -636,8 +659,16 @@ export function MusicProvider({ children }) {
         password,
       });
 
-      setToken(response.data.token);
-      setUser(response.data.user);
+      const authPayload = extractAuthPayload(response.data);
+      const normalizedUser = normalizeUser(authPayload?.user || authPayload);
+      const nextToken = authPayload?.token;
+
+      if (!nextToken || !normalizedUser) {
+        throw new Error("Invalid auth response from server.");
+      }
+
+      setToken(nextToken);
+      setUser(normalizedUser);
       setAuthError("");
       return true;
     } catch (error) {
