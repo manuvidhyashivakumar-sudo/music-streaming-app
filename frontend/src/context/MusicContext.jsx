@@ -32,8 +32,22 @@ const normalizeUser = (account) => {
   if (!account || typeof account !== "object") return null;
 
   const id = account._id || account.id || "";
-  const name = typeof account.name === "string" ? account.name.trim() : "";
-  const email = typeof account.email === "string" ? account.email.trim().toLowerCase() : "";
+  const name =
+    typeof account.name === "string"
+      ? account.name.trim()
+      : typeof account.username === "string"
+        ? account.username.trim()
+        : typeof account.fullName === "string"
+          ? account.fullName.trim()
+          : "";
+  const email =
+    typeof account.email === "string"
+      ? account.email.trim().toLowerCase()
+      : typeof account.mail === "string"
+        ? account.mail.trim().toLowerCase()
+        : typeof account.userEmail === "string"
+          ? account.userEmail.trim().toLowerCase()
+          : "";
 
   if (!name && !email) return null;
 
@@ -336,9 +350,22 @@ export function MusicProvider({ children }) {
 
   const extractAuthPayload = (payload) => {
     if (!payload) return null;
+
+    if (typeof payload === "string") {
+      try {
+        const parsed = JSON.parse(payload);
+        return extractAuthPayload(parsed);
+      } catch {
+        return payload;
+      }
+    }
+
     if (payload.user && payload.token) return payload;
     if (payload.data?.user && payload.data?.token) return payload.data;
     if (payload.data?.data?.user && payload.data?.data?.token) return payload.data.data;
+    if (payload.result?.user || payload.result?.token) return payload.result;
+    if (payload.payload?.user || payload.payload?.token) return payload.payload;
+    if (payload.response?.user || payload.response?.token) return payload.response;
     return payload;
   };
 
@@ -387,11 +414,17 @@ export function MusicProvider({ children }) {
     return (
       payload?.token ||
       payload?.accessToken ||
+      payload?.access_token ||
       payload?.jwt ||
+      payload?.authToken ||
+      payload?.idToken ||
       payload?.data?.token ||
       payload?.data?.accessToken ||
+      payload?.data?.access_token ||
       payload?.data?.jwt ||
+      payload?.data?.authToken ||
       payload?.auth?.token ||
+      payload?.auth?.accessToken ||
       findNestedMatch(
         payload,
         (candidate) =>
@@ -412,6 +445,9 @@ export function MusicProvider({ children }) {
       payload?.data?.user ||
       payload?.data?.account ||
       payload?.data?.profile ||
+      payload?.data?.currentUser ||
+      payload?.result?.user ||
+      payload?.payload?.user ||
       payload?.auth?.user ||
       findNestedMatch(
         payload,

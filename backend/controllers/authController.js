@@ -63,7 +63,8 @@ exports.register = async (req, res) => {
       res.set("Authorization", `Bearer ${token}`);
       res.set("X-Auth-Token", token);
       return res.status(201).json({
-        user: { id: newUser.id, name: newUser.name, email: newUser.email },
+        user: { id: newUser.id, _id: newUser.id, name: newUser.name, email: newUser.email },
+        accessToken: token,
         token,
       });
     }
@@ -90,9 +91,11 @@ exports.register = async (req, res) => {
     res.status(201).json({
       user: {
         id: newUser._id,
+        _id: newUser._id,
         name: newUser.name,
         email: newUser.email,
       },
+      accessToken: token,
       token,
     });
   } catch (error) {
@@ -124,7 +127,8 @@ exports.login = async (req, res) => {
       res.set("Authorization", `Bearer ${token}`);
       res.set("X-Auth-Token", token);
       return res.json({
-        user: { id: user.id, name: user.name, email: user.email },
+        user: { id: user.id, _id: user.id, name: user.name, email: user.email },
+        accessToken: token,
         token,
       });
     }
@@ -150,9 +154,11 @@ exports.login = async (req, res) => {
     res.json({
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
       },
+      accessToken: token,
       token,
     });
   } catch (error) {
