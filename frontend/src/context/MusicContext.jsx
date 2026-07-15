@@ -307,14 +307,27 @@ export function MusicProvider({ children }) {
       return { id: `playlist-${Date.now()}`, title: "Untitled playlist", songs: [] };
     }
 
+    const normalizedTitle =
+      playlist.title ||
+      playlist.name ||
+      playlist.playlistName ||
+      playlist.label ||
+      "Untitled playlist";
+
     return {
       id: playlist._id || playlist.id || `playlist-${Date.now()}`,
-      title: playlist.title || playlist.name || "Untitled playlist",
+      title: normalizedTitle,
       songs: (playlist.songs || [])
         .map((song) => (typeof song === "string" ? song : song?._id || song?.id || song?.songId))
         .map((songId) => (songId ? String(songId) : ""))
         .filter(Boolean),
     };
+  };
+
+  const extractPlaylistPayload = (payload) => {
+    if (!payload) return null;
+    if (Array.isArray(payload)) return payload[0] || null;
+    return payload.playlist || payload.data?.playlist || payload.data || payload;
   };
 
   const loadSongs = useCallback(async (query = "") => {
@@ -351,7 +364,14 @@ export function MusicProvider({ children }) {
     setIsLoadingPlaylists(true);
     try {
       const response = await api.get("/playlists");
-      const backendPlaylists = Array.isArray(response.data) ? response.data : [response.data].filter(Boolean);
+      const payload = response.data;
+      const backendPlaylists = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.playlists)
+          ? payload.playlists
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : [payload?.playlist || payload].filter(Boolean);
       const normalizedPlaylists = backendPlaylists.map(normalizePlaylist).filter(Boolean);
       if (normalizedPlaylists.length) {
         setPlaylists(normalizedPlaylists);
@@ -735,11 +755,16 @@ export function MusicProvider({ children }) {
     if (!trimmed) return null;
 
     try {
-      const response = await api.post("/playlists", { title: trimmed });
-      const createdPlaylist = normalizePlaylist(response.data);
-      setPlaylists((previous) => [...previous, createdPlaylist]);
-      setSelectedPlaylistId(createdPlaylist.id);
-      return createdPlaylist;
+      const response = await api.post("/playlists", { title: trimmed, name: trimmed });
+      const payload = extractPlaylistPayload(response.data);
+      const createdPlaylist = normalizePlaylist(payload || { title: trimmed });
+      const finalizedPlaylist = {
+        ...createdPlaylist,
+        title: createdPlaylist.title === "Untitled playlist" ? trimmed : createdPlaylist.title,
+      };
+      setPlaylists((previous) => [...previous, finalizedPlaylist]);
+      setSelectedPlaylistId(finalizedPlaylist.id);
+      return finalizedPlaylist;
     } catch (error) {
       const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
       const fallbackPlaylist = { id, title: trimmed, songs: [] };
