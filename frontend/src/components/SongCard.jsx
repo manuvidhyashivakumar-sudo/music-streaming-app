@@ -31,11 +31,9 @@ export default function SongCard({ song }) {
             <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(song.title)}&url=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800">
               <FaShareAlt />
             </button>
-            {selectedPlaylist ? (
-              <button onClick={() => addToPlaylist(song, selectedPlaylist?.id || selectedPlaylist?._id)} className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800">
-                <FaPlus />
-              </button>
-            ) : null}
+            <button onClick={() => addToPlaylist(song, selectedPlaylist?.id || selectedPlaylist?._id)} className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800" title="Add to playlist">
+              <FaPlus />
+            </button>
           </div>
         </div>
       </div>

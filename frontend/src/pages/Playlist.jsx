@@ -2,7 +2,16 @@ import { useState } from "react";
 import { useMusic } from "../context/MusicContext";
 
 export default function Playlist() {
-  const { playlists, selectedPlaylist, playlistSongs, createPlaylist, setSelectedPlaylistId, playSong, removeFromPlaylist } = useMusic();
+  const {
+    playlists,
+    selectedPlaylist,
+    playlistSongs,
+    isLoadingPlaylists,
+    createPlaylist,
+    setSelectedPlaylistId,
+    playSong,
+    removeFromPlaylist,
+  } = useMusic();
   const [playlistName, setPlaylistName] = useState("");
 
   return (
@@ -39,13 +48,15 @@ export default function Playlist() {
         <div className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-xl font-bold text-white">Your playlists</h2>
           <div className="space-y-3">
-            {playlists.length ? (
+            {isLoadingPlaylists ? (
+              <p className="rounded-3xl border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">Loading playlists...</p>
+            ) : playlists.length ? (
               playlists.map((playlist) => (
                 <button
-                  key={playlist.id}
-                  onClick={() => setSelectedPlaylistId(playlist.id)}
+                  key={playlist.id || playlist._id}
+                  onClick={() => setSelectedPlaylistId(playlist.id || playlist._id)}
                   className={`w-full rounded-3xl border px-4 py-4 text-left transition ${
-                    selectedPlaylist?.id === playlist.id
+                    String(selectedPlaylist?.id || selectedPlaylist?._id) === String(playlist.id || playlist._id)
                       ? "border-green-500 bg-slate-950"
                       : "border-slate-800 bg-slate-900 hover:border-slate-700"
                   }`}
@@ -71,7 +82,7 @@ export default function Playlist() {
           {playlistSongs.length ? (
             <div className="space-y-4">
               {playlistSongs.map((song) => (
-                <div key={song._id} className="rounded-3xl border border-slate-800 bg-slate-950 p-4">
+                <div key={song._id || song.id || song.title} className="rounded-3xl border border-slate-800 bg-slate-950 p-4">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="font-semibold text-white">{song.title}</p>
@@ -81,7 +92,7 @@ export default function Playlist() {
                       <button onClick={() => playSong(song)} className="rounded-3xl bg-green-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-green-400">
                         Play
                       </button>
-                      <button onClick={() => removeFromPlaylist(song._id, selectedPlaylist?.id)} className="rounded-3xl border border-slate-800 px-4 py-2 text-sm text-slate-200 transition hover:bg-slate-800">
+                      <button onClick={() => removeFromPlaylist(song._id || song.id, selectedPlaylist?.id || selectedPlaylist?._id)} className="rounded-3xl border border-slate-800 px-4 py-2 text-sm text-slate-200 transition hover:bg-slate-800">
                         Remove
                       </button>
                     </div>

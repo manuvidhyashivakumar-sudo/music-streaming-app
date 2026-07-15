@@ -461,6 +461,22 @@ export function MusicProvider({ children }) {
   }, [songs, currentSong]);
 
   useEffect(() => {
+    if (!playlists.length) {
+      setSelectedPlaylistId(null);
+      return;
+    }
+
+    const hasSelectedPlaylist = playlists.some(
+      (playlist) => String(playlist.id || playlist._id) === String(selectedPlaylistId),
+    );
+
+    if (!hasSelectedPlaylist) {
+      const firstPlaylistId = playlists[0]?.id || playlists[0]?._id || null;
+      setSelectedPlaylistId(firstPlaylistId);
+    }
+  }, [playlists, selectedPlaylistId]);
+
+  useEffect(() => {
     if (isLoadingPlaylists) return;
     localStorage.setItem("musicify-playlists", JSON.stringify(playlists));
   }, [isLoadingPlaylists, playlists]);
