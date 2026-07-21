@@ -295,7 +295,7 @@ export function MusicProvider({ children }) {
   const [selectedGenre, setSelectedGenre] = useState("");
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(true);
   const [authError, setAuthError] = useState("");
   const [isLoadingSongs, setIsLoadingSongs] = useState(true);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(true);
@@ -336,6 +336,8 @@ export function MusicProvider({ children }) {
     return {
       id: playlist._id || playlist.id || `playlist-${Date.now()}`,
       title: normalizedTitle,
+      likes: typeof playlist.likes === "number" ? playlist.likes : 0,
+      comments: Array.isArray(playlist.comments) ? playlist.comments : [],
       songs: (playlist.songs || [])
         .map((song) => (typeof song === "string" ? song : song?._id || song?.id || song?.songId))
         .map((songId) => (songId ? String(songId) : ""))
@@ -470,17 +472,8 @@ export function MusicProvider({ children }) {
       const backendSongs = Array.isArray(response.data) ? response.data : [response.data].filter(Boolean);
       const normalizedSongs = backendSongs.map(normalizeSong).filter(Boolean);
       if (normalizedSongs.length) {
-        const combinedSongs = [...normalizedSongs];
-        const backendTitles = new Set(normalizedSongs.map((song) => song.title));
-        for (const fallbackSong of fallbackSongs) {
-          if (combinedSongs.length >= 20) break;
-          if (!backendTitles.has(fallbackSong.title)) {
-            combinedSongs.push({ ...fallbackSong, _id: fallbackSong._id });
-          }
-        }
-        const finalSongs = combinedSongs.slice(0, 20);
-        setSongs(finalSongs);
-        setCurrentSong((current) => (current && finalSongs.some((song) => song._id === current._id) ? current : finalSongs[0]));
+        setSongs(normalizedSongs);
+        setCurrentSong((current) => (current && normalizedSongs.some((song) => song._id === current._id) ? current : normalizedSongs[0]));
         setIsLoadingSongs(false);
         return;
       }
@@ -494,9 +487,20 @@ export function MusicProvider({ children }) {
   }, []);
 
   const loadPlaylists = useCallback(async () => {
+    if (!token) {
+      setPlaylists([]);
+      setSelectedPlaylistId(null);
+      setIsLoadingPlaylists(false);
+      return;
+    }
+
     setIsLoadingPlaylists(true);
     try {
-      const response = await api.get("/playlists");
+      const response = await api.get("/playlists", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       const payload = response.data;
       const backendPlaylists = Array.isArray(payload)
         ? payload
@@ -512,49 +516,35 @@ export function MusicProvider({ children }) {
         setIsLoadingPlaylists(false);
         return;
       }
+      setPlaylists([]);
+      setSelectedPlaylistId(null);
     } catch (error) {
-      console.warn("Unable to fetch playlists from backend.", error.message);
-    }
-
-    const savedPlaylists = localStorage.getItem("musicify-playlists");
-    if (savedPlaylists) {
-      try {
-        const parsed = JSON.parse(savedPlaylists);
-        const normalizedSavedPlaylists = Array.isArray(parsed) ? parsed.map(normalizePlaylist).filter(Boolean) : [];
-        const fallbackPlaylists = normalizedSavedPlaylists.length ? normalizedSavedPlaylists : [{ id: "default", title: "Favorites", songs: [] }];
-        setPlaylists(fallbackPlaylists);
-        setSelectedPlaylistId(fallbackPlaylists[0]?.id ?? "default");
-      } catch {
-        setPlaylists([{ id: "default", title: "Favorites", songs: [] }]);
-        setSelectedPlaylistId("default");
+      const status = error.response?.status;
+      if (status === 401 || status === 403) {
+        setPlaylists([]);
+        setSelectedPlaylistId(null);
+      } else {
+        console.warn("Unable to fetch playlists from backend.", error.message);
       }
-    } else {
-      setPlaylists([{ id: "default", title: "Favorites", songs: [] }]);
-      setSelectedPlaylistId("default");
     }
     setIsLoadingPlaylists(false);
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     loadSongs("");
-    loadPlaylists();
+    setIsAuthReady(true);
+  }, [loadSongs]);
 
-    const savedToken = localStorage.getItem("musicify-token");
-    const savedUser = localStorage.getItem("musicify-current-user");
-    if (savedToken && savedToken !== "undefined" && savedToken !== "null") {
-      setToken(savedToken);
-    } else {
-      localStorage.removeItem("musicify-token");
+  useEffect(() => {
+    if (!token || !user) {
+      setPlaylists([]);
+      setSelectedPlaylistId(null);
+      setIsLoadingPlaylists(false);
+      return;
     }
-    if (savedUser && savedUser !== "undefined") {
-      try {
-        setUser(normalizeUser(JSON.parse(savedUser)));
-      } catch {
-        localStorage.removeItem("musicify-current-user");
-      }
-    }
-    setIsAuthReady(!(savedToken && savedToken !== "undefined" && savedToken !== "null"));
-  }, [loadPlaylists, loadSongs]);
+
+    loadPlaylists();
+  }, [loadPlaylists, token, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -578,30 +568,11 @@ export function MusicProvider({ children }) {
           }
         } catch (error) {
           const status = error.response?.status;
-          // Keep the current authenticated session when profile fetch fails due transient network/CORS errors.
-          if (!status || (status !== 401 && status !== 403)) {
-            setAuthError("");
-            return;
-          }
-
-          const savedUser = localStorage.getItem("musicify-current-user");
-          if (savedUser && savedUser !== "undefined") {
-            try {
-              const parsed = normalizeUser(JSON.parse(savedUser));
-              if (parsed) {
-                setUser(parsed);
-                setAuthError("");
-              } else {
-                setToken(null);
-                setUser(null);
-              }
-            } catch {
-              setToken(null);
-              setUser(null);
-            }
-          } else {
+          if (status === 401 || status === 403) {
             setToken(null);
             setUser(null);
+          } else {
+            setAuthError(error.response?.data?.message || "Unable to validate session.");
           }
         } finally {
           setIsAuthReady(true);
@@ -635,28 +606,6 @@ export function MusicProvider({ children }) {
       setSelectedPlaylistId(firstPlaylistId);
     }
   }, [playlists, selectedPlaylistId]);
-
-  useEffect(() => {
-    if (isLoadingPlaylists) return;
-    localStorage.setItem("musicify-playlists", JSON.stringify(playlists));
-  }, [isLoadingPlaylists, playlists]);
-
-  useEffect(() => {
-    const normalizedUser = normalizeUser(user);
-    if (normalizedUser) {
-      localStorage.setItem("musicify-current-user", JSON.stringify(normalizedUser));
-    } else {
-      localStorage.removeItem("musicify-current-user");
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem("musicify-token", token);
-    } else {
-      localStorage.removeItem("musicify-token");
-    }
-  }, [token]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -769,36 +718,11 @@ export function MusicProvider({ children }) {
         }
       }
 
-      if (!nextToken && !normalizedUser) {
-        try {
-          const profileResponse = await api.get("/auth/profile");
-          normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
-        } catch {
-          // Continue to unified validation below.
-        }
-      }
-
-      // Accept login when user payload is present even if token is absent (cookie/session or variant API responses).
-      if (!nextToken && normalizedUser) {
-        setUser(normalizedUser);
-        setAuthError("");
-        return true;
-      }
-
       if (!nextToken || !normalizedUser) {
-        // Some hosted backends return 2xx with minimal payload. Keep user signed in locally instead of blocking.
-        const derivedName = normalizedEmailInput.split("@")[0] || "User";
-        normalizedUser = normalizeUser({
-          id: `local-${Date.now()}`,
-          name: derivedName.charAt(0).toUpperCase() + derivedName.slice(1),
-          email: normalizedEmailInput,
-        });
-        if (!normalizedUser) {
-          throw new Error("Login failed. Please verify your credentials and backend deployment settings.");
-        }
+        throw new Error("Login failed. Backend did not return a valid token/user payload.");
       }
 
-      setToken(nextToken || null);
+      setToken(nextToken);
       setUser(normalizedUser);
       setAuthError("");
       return true;
@@ -817,6 +741,22 @@ export function MusicProvider({ children }) {
     try {
       const normalizedNameInput = name.trim();
       const normalizedEmailInput = email.trim().toLowerCase();
+
+      if (!normalizedNameInput || !normalizedEmailInput || !password) {
+        setAuthError("Name, email, and password are required.");
+        return false;
+      }
+
+      if (!/^\S+@\S+\.\S+$/.test(normalizedEmailInput)) {
+        setAuthError("Please provide a valid email address.");
+        return false;
+      }
+
+      if (password.length < 6) {
+        setAuthError("Password must be at least 6 characters long.");
+        return false;
+      }
+
       const response = await api.post("/auth/register", {
         name: normalizedNameInput,
         email: normalizedEmailInput,
@@ -824,23 +764,8 @@ export function MusicProvider({ children }) {
       });
 
       const authPayload = extractAuthPayload(response.data);
-      let nextToken = extractTokenFromPayload(authPayload, response.headers);
+      const nextToken = extractTokenFromPayload(authPayload, response.headers);
       let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
-
-      // Some deployed backends register successfully but return no token. Auto-login to complete the session.
-      if (!nextToken) {
-        try {
-          const loginResponse = await api.post("/auth/login", {
-            email: email.trim().toLowerCase(),
-            password,
-          });
-          const loginPayload = extractAuthPayload(loginResponse.data);
-          nextToken = extractTokenFromPayload(loginPayload, loginResponse.headers);
-          normalizedUser = normalizeUser(extractUserFromPayload(loginPayload) || loginPayload || normalizedUser);
-        } catch {
-          // Fall through to validation and show backend-provided message when available.
-        }
-      }
 
       if (nextToken && !normalizedUser) {
         try {
@@ -854,25 +779,21 @@ export function MusicProvider({ children }) {
       }
 
       if (!nextToken || !normalizedUser) {
-        // Keep registration flow usable in deployments that omit auth payload on success.
-        const fallbackName = normalizedNameInput || normalizedEmailInput.split("@")[0] || "User";
-        normalizedUser = normalizeUser({
-          id: `local-${Date.now()}`,
-          name: fallbackName,
-          email: normalizedEmailInput,
-        });
-        if (!normalizedUser) {
-          setAuthError("Registration successful. Please login to continue.");
-          return "requires-login";
-        }
+        throw new Error("Registration failed. Backend did not return a valid token/user payload.");
       }
 
-      setToken(nextToken || null);
+      setToken(nextToken);
       setUser(normalizedUser);
       setAuthError("");
       return true;
     } catch (error) {
       console.error("Register error:", error);
+
+      if (error.response?.status === 409) {
+        setAuthError(error.response?.data?.message || "Email is already registered. Please login.");
+        return "requires-login";
+      }
+
       setAuthError(
         error.response?.data?.message ||
           error.message ||
@@ -985,8 +906,21 @@ export function MusicProvider({ children }) {
     const trimmed = title.trim();
     if (!trimmed) return null;
 
+    if (!token || !user) {
+      setAuthError("Please login to create a playlist.");
+      return null;
+    }
+
     try {
-      const response = await api.post("/playlists", { title: trimmed, name: trimmed });
+      const response = await api.post(
+        "/playlists",
+        { title: trimmed, name: trimmed },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
       const payload = extractPlaylistPayload(response.data);
       const createdPlaylist = normalizePlaylist(payload || { title: trimmed });
       const finalizedPlaylist = {
@@ -995,14 +929,11 @@ export function MusicProvider({ children }) {
       };
       setPlaylists((previous) => [...previous, finalizedPlaylist]);
       setSelectedPlaylistId(finalizedPlaylist.id);
+      setAuthError("");
       return finalizedPlaylist;
     } catch (error) {
-      const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
-      const fallbackPlaylist = { id, title: trimmed, songs: [] };
-      setPlaylists((previous) => [...previous, fallbackPlaylist]);
-      setSelectedPlaylistId(id);
-      console.warn("Unable to save playlist to backend.", error.message);
-      return fallbackPlaylist;
+      setAuthError(error.response?.data?.message || "Unable to create playlist.");
+      return null;
     }
   };
 
@@ -1010,50 +941,238 @@ export function MusicProvider({ children }) {
     const normalizedSongId = getSongIdentifier(songOrId);
     if (!normalizedSongId) return;
 
-    const fallbackPlaylistId = playlists[0]?.id || playlists[0]?._id;
-    const resolvedPlaylistId = playlistId || selectedPlaylistId || fallbackPlaylistId;
-    if (!resolvedPlaylistId) return;
-
-    const normalizedPlaylistId = String(resolvedPlaylistId);
-    const playlist = playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId);
-    if (!playlist || playlist.songs.some((id) => String(id) === normalizedSongId)) return;
-
-    try {
-      await api.patch(`/playlists/${normalizedPlaylistId}/add`, { songId: normalizedSongId });
-    } catch (error) {
-      console.warn("Unable to sync playlist with backend.", error.message);
+    if (!token || !user) {
+      setAuthError("Please login to add songs to a playlist.");
+      return;
     }
 
-    setPlaylists((previous) =>
-      previous.map((entry) => {
-        if (String(entry.id || entry._id) !== normalizedPlaylistId) return entry;
-        return { ...entry, songs: [...new Set([...entry.songs.map(String), normalizedSongId])] };
-      }),
-    );
+    const fallbackPlaylistId = playlists[0]?.id || playlists[0]?._id;
+    let resolvedPlaylistId = playlistId || selectedPlaylistId || fallbackPlaylistId;
+    let resolvedPlaylist = null;
+
+    if (!resolvedPlaylistId) {
+      const created = await createPlaylist("Favorites");
+      const createdId = created?.id || created?._id;
+      if (!createdId) {
+        setAuthError("Unable to create a playlist. Please try again.");
+        return;
+      }
+      resolvedPlaylistId = createdId;
+      resolvedPlaylist = normalizePlaylist(created);
+    }
+
+    const normalizedPlaylistId = String(resolvedPlaylistId);
+    const playlist =
+      resolvedPlaylist ||
+      playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId) ||
+      null;
+    if (!playlist) {
+      setAuthError("Please select a playlist first.");
+      return;
+    }
+
+    if (playlist.songs.some((id) => String(id) === normalizedSongId)) {
+      setAuthError("Song already exists in this playlist.");
+      return;
+    }
+
+    try {
+      const response = await api.patch(
+        `/playlists/${normalizedPlaylistId}/add`,
+        { songId: normalizedSongId },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      const payload = extractPlaylistPayload(response.data);
+      const updatedPlaylist = normalizePlaylist(payload || { ...playlist, songs: [...playlist.songs, normalizedSongId] });
+
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to add song to playlist.");
+    }
   };
 
   const removeFromPlaylist = async (songId, playlistId) => {
     if (!songId || !playlistId) return;
 
+    if (!token || !user) {
+      setAuthError("Please login to modify playlists.");
+      return;
+    }
+
     const normalizedSongId = String(songId);
     const normalizedPlaylistId = String(playlistId);
 
     try {
-      await api.patch(`/playlists/${normalizedPlaylistId}/remove`, { songId: normalizedSongId });
+      const response = await api.patch(
+        `/playlists/${normalizedPlaylistId}/remove`,
+        { songId: normalizedSongId },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const payload = extractPlaylistPayload(response.data);
+      const playlist = playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId);
+      const updatedPlaylist = normalizePlaylist(
+        payload || {
+          ...(playlist || { id: normalizedPlaylistId, title: "Untitled playlist" }),
+          songs: (playlist?.songs || []).filter((id) => String(id) !== normalizedSongId),
+        },
+      );
+
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
     } catch (error) {
-      console.warn("Unable to sync playlist removal with backend.", error.message);
+      setAuthError(error.response?.data?.message || "Unable to remove song from playlist.");
+    }
+  };
+
+  const renamePlaylist = async (playlistId, nextTitle) => {
+    const trimmedTitle = String(nextTitle || "").trim();
+    if (!playlistId || !trimmedTitle) return false;
+
+    if (!token || !user) {
+      setAuthError("Please login to modify playlists.");
+      return false;
     }
 
-    setPlaylists((previous) =>
-      previous.map((entry) =>
-        String(entry.id || entry._id) !== normalizedPlaylistId
-          ? entry
-          : {
-              ...entry,
-              songs: entry.songs.filter((id) => String(id) !== normalizedSongId),
-            },
-      ),
-    );
+    const normalizedPlaylistId = String(playlistId);
+    try {
+      const response = await api.patch(
+        `/playlists/${normalizedPlaylistId}`,
+        { title: trimmedTitle },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const payload = extractPlaylistPayload(response.data);
+      const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: trimmedTitle, songs: [] });
+
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+      return true;
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to rename playlist.");
+      return false;
+    }
+  };
+
+  const deletePlaylist = async (playlistId) => {
+    if (!playlistId) return false;
+
+    if (!token || !user) {
+      setAuthError("Please login to modify playlists.");
+      return false;
+    }
+
+    const normalizedPlaylistId = String(playlistId);
+    try {
+      await api.delete(`/playlists/${normalizedPlaylistId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      setPlaylists((previous) =>
+        previous.filter((entry) => String(entry.id || entry._id) !== normalizedPlaylistId),
+      );
+
+      setSelectedPlaylistId((current) => (String(current) === normalizedPlaylistId ? null : current));
+      setAuthError("");
+      return true;
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to delete playlist.");
+      return false;
+    }
+  };
+
+  const likePlaylist = async (playlistId) => {
+    if (!playlistId) return false;
+    if (!token || !user) {
+      setAuthError("Please login to modify playlists.");
+      return false;
+    }
+
+    const normalizedPlaylistId = String(playlistId);
+    try {
+      const response = await api.patch(
+        `/playlists/${normalizedPlaylistId}/like`,
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      const payload = extractPlaylistPayload(response.data);
+      const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] });
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+      return true;
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to like playlist.");
+      return false;
+    }
+  };
+
+  const addPlaylistComment = async (playlistId, text) => {
+    const commentText = String(text || "").trim();
+    if (!playlistId || !commentText) return false;
+    if (!token || !user) {
+      setAuthError("Please login to modify playlists.");
+      return false;
+    }
+
+    const normalizedPlaylistId = String(playlistId);
+    try {
+      const response = await api.post(
+        `/playlists/${normalizedPlaylistId}/comments`,
+        { text: commentText, user: user?.name || "Guest" },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      const payload = extractPlaylistPayload(response.data);
+      const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] });
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+      return true;
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to comment on playlist.");
+      return false;
+    }
   };
 
   const selectedPlaylist =
@@ -1104,6 +1223,10 @@ export function MusicProvider({ children }) {
         createPlaylist,
         addToPlaylist,
         removeFromPlaylist,
+        renamePlaylist,
+        deletePlaylist,
+        likePlaylist,
+        addPlaylistComment,
         setSelectedPlaylistId,
         loginUser,
         registerUser,

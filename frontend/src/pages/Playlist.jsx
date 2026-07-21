@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMusic } from "../context/MusicContext";
+import InteractionPanel from "../components/InteractionPanel";
 
 export default function Playlist() {
   const {
@@ -11,8 +13,19 @@ export default function Playlist() {
     setSelectedPlaylistId,
     playSong,
     removeFromPlaylist,
+    renamePlaylist,
+    deletePlaylist,
+    likePlaylist,
+    addPlaylistComment,
+    user,
+    authError,
+    setAuthError,
   } = useMusic();
   const [playlistName, setPlaylistName] = useState("");
+  const [renameTitle, setRenameTitle] = useState("");
+  const navigate = useNavigate();
+
+  const selectedPlaylistId = selectedPlaylist?.id || selectedPlaylist?._id;
 
   return (
     <div className="space-y-6">
@@ -22,11 +35,25 @@ export default function Playlist() {
             <p className="text-sm uppercase tracking-[0.3em] text-green-400">Playlist management</p>
             <h1 className="text-3xl font-bold text-white">Create and manage your playlists.</h1>
           </div>
+          {!user ? (
+            <button
+              type="button"
+              onClick={() => navigate("/login")}
+              className="rounded-3xl border border-slate-800 bg-slate-900 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:bg-slate-800"
+            >
+              Login to manage playlists
+            </button>
+          ) : null}
         </div>
+
+        {!user ? <p className="mt-5 text-sm text-amber-300">Playlists are account-specific. Please login to view or edit your playlists.</p> : null}
+
+        {authError ? <p className="mt-4 text-sm text-red-400">{authError}</p> : null}
 
         <form
           onSubmit={(event) => {
             event.preventDefault();
+            setAuthError("");
             createPlaylist(playlistName);
             setPlaylistName("");
           }}
@@ -36,12 +63,45 @@ export default function Playlist() {
             value={playlistName}
             onChange={(event) => setPlaylistName(event.target.value)}
             placeholder="New playlist name"
+            disabled={!user}
             className="w-full rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-500/30"
           />
-          <button className="rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400">
+          <button disabled={!user} className="rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50">
             Create playlist
           </button>
         </form>
+
+        {user && selectedPlaylist ? (
+          <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+            <input
+              value={renameTitle}
+              onChange={(event) => setRenameTitle(event.target.value)}
+              placeholder={selectedPlaylist.title || "Rename playlist"}
+              className="w-full rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-500/30"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                const nextTitle = renameTitle.trim() || selectedPlaylist.title;
+                const success = await renamePlaylist(selectedPlaylistId, nextTitle);
+                if (success) setRenameTitle("");
+              }}
+              className="rounded-3xl border border-slate-800 bg-slate-900 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:bg-slate-800"
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const success = await deletePlaylist(selectedPlaylistId);
+                if (success) setRenameTitle("");
+              }}
+              className="rounded-3xl border border-red-900 bg-red-950/40 px-6 py-3 text-sm font-semibold text-red-300 transition hover:bg-red-900/30"
+            >
+              Delete
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[320px_1fr]">
@@ -105,6 +165,18 @@ export default function Playlist() {
               No songs added to this playlist yet. Add music from Home or Search.
             </div>
           )}
+
+          {selectedPlaylist ? (
+            <div className="mt-6 rounded-3xl border border-slate-800 bg-slate-950 p-5">
+              <h3 className="mb-4 text-lg font-bold text-white">Playlist interactions</h3>
+              <InteractionPanel
+                item={selectedPlaylist}
+                label="playlist"
+                onLike={() => likePlaylist(selectedPlaylistId)}
+                onComment={(text) => addPlaylistComment(selectedPlaylistId, text)}
+              />
+            </div>
+          ) : null}
         </div>
       </section>
     </div>

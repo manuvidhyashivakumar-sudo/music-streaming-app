@@ -2,8 +2,14 @@ import { FaHeart, FaPlay, FaPlus, FaShareAlt } from "react-icons/fa";
 import { useMusic } from "../context/MusicContext";
 
 export default function SongCard({ song }) {
-  const { playSong, toggleLike, addToPlaylist, selectedPlaylist } = useMusic();
+  const { playSong, toggleLike, addToPlaylist, selectedPlaylist, playlists, user, isLoadingPlaylists } = useMusic();
   const imageUrl = song.imageUrl || song.image || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f";
+  const canAddToPlaylist = Boolean(user) && !isLoadingPlaylists;
+  const addButtonTitle = !user
+    ? "Login to add songs to playlists"
+    : !playlists.length
+      ? "Add song and create Favorites playlist"
+      : "Add to playlist";
 
   return (
     <div className="bg-slate-900 rounded-2xl overflow-hidden transition hover:scale-[1.01]">
@@ -31,7 +37,12 @@ export default function SongCard({ song }) {
             <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(song.title)}&url=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800">
               <FaShareAlt />
             </button>
-            <button onClick={() => addToPlaylist(song, selectedPlaylist?.id || selectedPlaylist?._id)} className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800" title="Add to playlist">
+            <button
+              onClick={() => addToPlaylist(song, selectedPlaylist?.id || selectedPlaylist?._id)}
+              disabled={!canAddToPlaylist}
+              className="rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              title={addButtonTitle}
+            >
               <FaPlus />
             </button>
           </div>

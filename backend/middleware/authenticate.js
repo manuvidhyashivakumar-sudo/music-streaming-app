@@ -1,7 +1,6 @@
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const User = require("../models/User");
-const { fallbackUsers } = require("../config/fallbackStore");
 
 module.exports = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -14,13 +13,7 @@ module.exports = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     if (mongoose.connection.readyState !== 1) {
-      const fallbackUser = fallbackUsers.find((user) => user.id === decoded.id);
-      if (!fallbackUser) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      req.user = fallbackUser;
-      return next();
+      return res.status(503).json({ message: "Database is not connected." });
     }
 
     const user = await User.findById(decoded.id).select("-password");

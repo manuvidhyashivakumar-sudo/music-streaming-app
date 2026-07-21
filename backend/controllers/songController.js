@@ -246,7 +246,7 @@ exports.getSongs = async (req, res) => {
       const search = (req.query.search || "").toLowerCase();
       const filtered = search
         ? getFallbackSongs().filter((song) => {
-            const haystack = `${song.title} ${song.artist} ${song.album} ${song.genre}`.toLowerCase();
+            const haystack = `${song.title} ${song.artist} ${song.album} ${song.movie || ""} ${song.genre}`.toLowerCase();
             return haystack.includes(search);
           })
         : getFallbackSongs();
@@ -260,6 +260,7 @@ exports.getSongs = async (req, res) => {
             { title: { $regex: search, $options: "i" } },
             { artist: { $regex: search, $options: "i" } },
             { album: { $regex: search, $options: "i" } },
+            { movie: { $regex: search, $options: "i" } },
             { genre: { $regex: search, $options: "i" } },
           ],
         }

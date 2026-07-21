@@ -15,6 +15,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
+  "http://localhost:5175",
+  "http://127.0.0.1:5175",
   "http://localhost:4173",
   "http://127.0.0.1:4173",
   process.env.FRONTEND_URL,
@@ -22,6 +24,22 @@ const allowedOrigins = [
 ]
   .filter(Boolean)
   .map((origin) => origin.replace(/\/$/, ""));
+
+const isAllowedLocalDevOrigin = (origin) => {
+  try {
+    const parsed = new URL(origin);
+    if (!/^https?:$/i.test(parsed.protocol)) return false;
+    const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    return isLocalHost;
+  } catch {
+    return false;
+  }
+};
+
+const isEditorOrigin = (origin) => {
+  const normalized = String(origin || "").toLowerCase();
+  return normalized.startsWith("vscode-file://") || normalized.startsWith("vscode-webview://");
+};
 
 app.use(
   cors({
@@ -40,10 +58,13 @@ app.use(
       if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
+      if (isAllowedLocalDevOrigin(normalizedOrigin) || isEditorOrigin(normalizedOrigin)) {
+        return callback(null, true);
+      }
       if (isNetlifyOrigin) {
         return callback(null, true);
       }
-      return callback(new Error("CORS origin not allowed"));
+      return callback(null, false);
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
@@ -51,7 +72,8 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 5000;
 
@@ -66,6 +88,13 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/songs", songRoutes);
 app.use("/api/playlists", playlistRoutes);
+
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body")) {
+    return res.status(400).json({ message: "Invalid JSON request body." });
+  }
+  return next(error);
+});
 
 const startServer = async () => {
   try {

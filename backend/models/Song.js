@@ -14,6 +14,8 @@ const songSchema = new mongoose.Schema(
 
     album: String,
 
+    movie: String,
+
     genre: String,
 
     imageUrl: String,
@@ -24,6 +26,23 @@ const songSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+
+    comments: [
+      {
+        user: {
+          type: String,
+          default: "Guest",
+        },
+        text: {
+          type: String,
+          required: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );

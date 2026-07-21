@@ -2,11 +2,19 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const User = require("../models/User");
-const { fallbackUsers, normalizeEmail, ensureSeedUser } = require("../config/fallbackStore");
+
+const normalizeAuthPayload = (payload = {}) => {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
+  const name = typeof safePayload.name === "string" ? safePayload.name.trim() : "";
+  const email = typeof safePayload.email === "string" ? safePayload.email.trim().toLowerCase() : "";
+  const password = typeof safePayload.password === "string" ? safePayload.password : "";
+  return { name, email, password };
+};
+
+const isValidEmail = (email) => /^\S+@\S+\.\S+$/.test(email);
 
 exports.seedDefaultUser = async () => {
   if (mongoose.connection.readyState !== 1) {
-    await ensureSeedUser();
     return;
   }
 
@@ -26,62 +34,43 @@ exports.seedDefaultUser = async () => {
   }
 };
 
-const getUserStore = async () => {
+const getUserModel = () => {
   if (mongoose.connection.readyState !== 1) {
-    await ensureSeedUser();
-    return { model: null, fallback: true };
+    return null;
   }
 
-  return { model: User, fallback: false };
+  return User;
 };
 
 exports.register = async (req, res) => {
   try {
-    const { model, fallback } = await getUserStore();
-    if (fallback) {
-      const { name, email, password } = req.body;
-      if (!name || !email || !password) {
-        return res.status(400).json({ message: "Name, email, and password are required." });
-      }
-
-      const normalizedEmail = normalizeEmail(email);
-      const existingUser = fallbackUsers.find((user) => user.email === normalizedEmail);
-      if (existingUser) {
-        return res.status(400).json({ message: "Email is already registered." });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const newUser = {
-        id: `${Date.now()}`,
-        name: name.trim(),
-        email: normalizedEmail,
-        password: hashedPassword,
-      };
-      fallbackUsers.push(newUser);
-
-      const token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.set("Authorization", `Bearer ${token}`);
-      res.set("X-Auth-Token", token);
-      return res.status(201).json({
-        user: { id: newUser.id, _id: newUser.id, name: newUser.name, email: newUser.email },
-        accessToken: token,
-        token,
-      });
+    const model = getUserModel();
+    if (!model) {
+      return res.status(503).json({ message: "Database is not connected." });
     }
-    const { name, email, password } = req.body;
+
+    const { name, email, password } = normalizeAuthPayload(req.body);
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email, and password are required." });
     }
 
-    const existingUser = await model.findOne({ email: email.toLowerCase().trim() });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: "Please provide a valid email address." });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters long." });
+    }
+
+    const existingUser = await model.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({ message: "Email is already registered." });
+      return res.status(409).json({ message: "Email is already registered. Please login instead." });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = await model.create({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
+      name,
+      email,
       password: hashedPassword,
     });
 
@@ -105,40 +94,21 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { model, fallback } = await getUserStore();
-    if (fallback) {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        return res.status(400).json({ message: "Email and password are required." });
-      }
-
-      const normalizedEmail = normalizeEmail(email);
-      const user = fallbackUsers.find((item) => item.email === normalizedEmail);
-      if (!user) {
-        return res.status(401).json({ message: "Invalid credentials." });
-      }
-
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return res.status(401).json({ message: "Invalid credentials." });
-      }
-
-      const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.set("Authorization", `Bearer ${token}`);
-      res.set("X-Auth-Token", token);
-      return res.json({
-        user: { id: user.id, _id: user.id, name: user.name, email: user.email },
-        accessToken: token,
-        token,
-      });
+    const model = getUserModel();
+    if (!model) {
+      return res.status(503).json({ message: "Database is not connected." });
     }
 
-    const { email, password } = req.body;
+    const { email, password } = normalizeAuthPayload(req.body);
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required." });
     }
 
-    const user = await model.findOne({ email: email.toLowerCase().trim() });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: "Please provide a valid email address." });
+    }
+
+    const user = await model.findOne({ email });
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
@@ -181,6 +151,10 @@ exports.getProfile = async (req, res) => {
 exports.updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ message: "Database is not connected." });
+    }
+
     if (!req.user) {
       return res.status(401).json({ message: "Unauthorized" });
     }

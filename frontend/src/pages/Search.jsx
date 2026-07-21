@@ -17,7 +17,7 @@ export default function Search() {
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search by title, artist, album, or genre"
+              placeholder="Search by title, artist, album, movie, or genre"
               className="w-full rounded-3xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-500/30"
             />
           </div>
