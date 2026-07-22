@@ -3,6 +3,7 @@ import axios from "axios";
 
 const getApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_URL?.trim();
+  const configuredOrigin = import.meta.env.VITE_API_ORIGIN?.trim();
   const localDevFallback = "http://localhost:5000/api";
   const deployedFallback = "https://music-streaming-app.onrender.com/api";
 
@@ -19,6 +20,18 @@ const getApiBaseUrl = () => {
       return `${cleanedConfigured}/api`;
     }
     return cleanedConfigured;
+  }
+
+  if (configuredOrigin) {
+    const cleanedOrigin = configuredOrigin.replace(/\/$/, "");
+    return /\/api(\/|$)/i.test(cleanedOrigin) ? cleanedOrigin : `${cleanedOrigin}/api`;
+  }
+
+  if (!import.meta.env.DEV && typeof window !== "undefined") {
+    const currentOrigin = String(window.location.origin || "").replace(/\/$/, "");
+    if (currentOrigin) {
+      return `${currentOrigin}/api`;
+    }
   }
 
   if (import.meta.env.DEV) {
@@ -44,8 +57,10 @@ const buildApiBaseCandidates = () => {
   const prefixCandidates = ["", "/api", "/v1", "/api/v1"];
   const seedUrls = [
     import.meta.env.VITE_API_URL,
+    import.meta.env.VITE_API_ORIGIN,
     import.meta.env.VITE_PROXY_TARGET,
     getApiBaseUrl(),
+    typeof window !== "undefined" ? `${window.location.origin}/api` : "",
     "https://music-streaming-app.onrender.com",
     "https://music-streaming-backend.onrender.com",
     "https://music-streaming-api.onrender.com",
@@ -86,6 +101,7 @@ const buildApiBaseCandidates = () => {
 };
 
 const MusicContext = createContext();
+const AUTH_STORAGE_KEY = "musicify_auth_token";
 
 const authRouteFamilies = [
   {
@@ -393,9 +409,33 @@ export function MusicProvider({ children }) {
   const latestAuthCheckRef = useRef(0);
   const playlistHydrationRef = useRef(new Set());
 
-  const getAuthConfig = useCallback(() => {
-    return {};
+  const readStoredAuthToken = useCallback(() => {
+    if (typeof window === "undefined") return "";
+    return String(window.localStorage.getItem(AUTH_STORAGE_KEY) || "").trim();
   }, []);
+
+  const persistAuthToken = useCallback((token) => {
+    if (typeof window === "undefined") return;
+    const normalizedToken = String(token || "").trim();
+    if (!normalizedToken) {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(AUTH_STORAGE_KEY, normalizedToken);
+  }, []);
+
+  const getAuthConfig = useCallback(() => {
+    const token = readStoredAuthToken();
+    if (!token) {
+      return {};
+    }
+
+    return {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    };
+  }, [readStoredAuthToken]);
 
   const fetchProfileWithFallback = useCallback(async (requestConfig = {}) => {
     let lastError = null;
@@ -690,9 +730,20 @@ export function MusicProvider({ children }) {
         const authPayload = extractAuthPayload(response.data);
         let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
 
+        const resolvedToken =
+          typeof authPayload?.token === "string"
+            ? authPayload.token.trim()
+            : typeof authPayload?.accessToken === "string"
+              ? authPayload.accessToken.trim()
+              : "";
+
         if (!normalizedUser) {
           try {
-            const profileResponse = await api.get(selectedFamily.profile);
+            const profileResponse = await api.get(selectedFamily.profile, resolvedToken ? {
+              headers: {
+                Authorization: `Bearer ${resolvedToken}`,
+              },
+            } : undefined);
             normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
           } catch {
             return { ok: false };
@@ -703,6 +754,7 @@ export function MusicProvider({ children }) {
           ok: true,
           baseUrl,
           user: normalizedUser,
+          token: resolvedToken,
         };
       } catch {
         return { ok: false };
@@ -941,6 +993,7 @@ export function MusicProvider({ children }) {
 
         const status = error.response?.status;
         if (status === 401 || status === 403) {
+          persistAuthToken("");
           setUser(null);
         } else {
           setAuthError(error.response?.data?.message || "Unable to validate session.");
@@ -1237,6 +1290,7 @@ export function MusicProvider({ children }) {
       }
 
       setUser(loginResult.user || null);
+      persistAuthToken(loginResult.token || "");
       setAuthError("");
       return true;
     } catch (error) {
@@ -1286,6 +1340,12 @@ export function MusicProvider({ children }) {
       activeAuthRoutesRef.current = selectedFamily;
 
       const authPayload = extractAuthPayload(response.data);
+      const resolvedToken =
+        typeof authPayload?.token === "string"
+          ? authPayload.token.trim()
+          : typeof authPayload?.accessToken === "string"
+            ? authPayload.accessToken.trim()
+            : "";
       let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
 
       if (!normalizedUser) {
@@ -1311,6 +1371,7 @@ export function MusicProvider({ children }) {
       }
 
       setUser(normalizedUser);
+      persistAuthToken(resolvedToken || readStoredAuthToken());
       setAuthError("");
       return true;
     } catch (error) {
@@ -1332,10 +1393,11 @@ export function MusicProvider({ children }) {
 
   const logoutUser = async () => {
     try {
-      await api.post("/auth/logout", {});
+      await api.post("/auth/logout", {}, getAuthConfig());
     } catch {
       // Ignore logout API failures and still clear local state.
     }
+    persistAuthToken("");
     setUser(null);
     setAuthError("");
   };

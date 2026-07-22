@@ -7,7 +7,7 @@ Full-stack music streaming application with account-based authentication, playli
 - Frontend: React + Vite + Axios + React Router
 - Backend: Node.js + Express
 - Database: MongoDB (required for playlist persistence)
-- Auth: JWT in HttpOnly secure session cookie
+- Auth: JWT with HttpOnly secure session cookie plus bearer-token fallback for deployed clients
 
 ## Repository Structure
 
@@ -27,7 +27,7 @@ Full-stack music streaming application with account-based authentication, playli
 
 - Playlist data is handled by the backend and associated with the logged-in user.
 - Playlists are not stored in shared browser `localStorage` anymore.
-- Authentication tokens are not stored in frontend local storage; the server sets an HttpOnly cookie.
+- Deployed clients can authenticate with either the server cookie or the returned bearer token.
 - The Add to Playlist action requires login and a selected/created playlist.
 
 ## Setup
@@ -45,7 +45,12 @@ Environment variables:
 - `PORT` (optional, default `5000`)
 - `JWT_SECRET` (required in production; use a strong random value)
 - `MONGO_URI` (required for playlist CRUD)
-- `FRONTEND_URL` (optional, for CORS)
+- `FRONTEND_URL` (optional, primary frontend URL for CORS)
+- `FRONTEND_ORIGIN` (optional alternate frontend URL for CORS)
+- `CLIENT_URL` (optional alternate frontend URL for CORS)
+- `APP_URL` (optional alternate frontend URL for CORS)
+- `FRONTEND_URLS` (optional comma-separated frontend URLs for CORS)
+- `NETLIFY_URL` or `VERCEL_URL` (optional hosting platform frontend URL)
 
 ### 2. Frontend
 
@@ -58,6 +63,7 @@ npm run dev
 Optional frontend env:
 
 - `VITE_API_URL` (for deployed backend URL)
+- `VITE_API_ORIGIN` (optional backend origin; `/api` is appended automatically)
 - `VITE_ALLOW_REMOTE_DEV_API=true` (optional; allows dev server to use `VITE_API_URL` instead of localhost)
 
 ## Manual Verification Checklist

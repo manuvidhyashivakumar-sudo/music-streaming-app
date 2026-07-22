@@ -19,6 +19,19 @@ try {
   process.exit(1);
 }
 
+const configuredFrontendOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_ORIGIN,
+  process.env.CLIENT_URL,
+  process.env.APP_URL,
+  process.env.NETLIFY_URL,
+  process.env.VERCEL_URL ? `https://${String(process.env.VERCEL_URL).replace(/^https?:\/\//i, "")}` : "",
+  ...(String(process.env.FRONTEND_URLS || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)),
+];
+
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -26,8 +39,7 @@ const allowedOrigins = [
   "http://127.0.0.1:5175",
   "http://localhost:4173",
   "http://127.0.0.1:4173",
-  process.env.FRONTEND_URL,
-  process.env.NETLIFY_URL,
+  ...configuredFrontendOrigins,
 ]
   .filter(Boolean)
   .map((origin) => origin.replace(/\/$/, ""));
@@ -48,27 +60,29 @@ const isEditorOrigin = (origin) => {
   return normalized.startsWith("vscode-file://") || normalized.startsWith("vscode-webview://");
 };
 
+const isAllowedHostedFrontendOrigin = (origin) => {
+  try {
+    const parsed = new URL(origin);
+    const hostname = parsed.hostname.toLowerCase();
+    return /\.netlify\.app$/i.test(hostname) || /\.vercel\.app$/i.test(hostname) || /\.onrender\.com$/i.test(hostname);
+  } catch {
+    return false;
+  }
+};
+
 app.use(
   cors({
     origin(origin, callback) {
       // Allow non-browser clients and same-origin requests without an Origin header.
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/$/, "");
-      let isNetlifyOrigin = false;
-      try {
-        const parsed = new URL(normalizedOrigin);
-        isNetlifyOrigin = /\.netlify\.app$/i.test(parsed.hostname);
-      } catch {
-        isNetlifyOrigin = false;
-      }
-
       if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
       if (isAllowedLocalDevOrigin(normalizedOrigin) || isEditorOrigin(normalizedOrigin)) {
         return callback(null, true);
       }
-      if (isNetlifyOrigin) {
+      if (isAllowedHostedFrontendOrigin(normalizedOrigin)) {
         return callback(null, true);
       }
       return callback(null, false);

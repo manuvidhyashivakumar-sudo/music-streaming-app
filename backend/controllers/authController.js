@@ -37,6 +37,8 @@ const createAuthResponse = (account, token) => {
   }
 
   return {
+    token: safeToken,
+    accessToken: safeToken,
     user: {
       id: userId,
       _id: userId,
