@@ -633,6 +633,32 @@ export function MusicProvider({ children }) {
     return payload;
   };
 
+  const extractAuthToken = (payload) => {
+    if (!payload) return "";
+
+    const candidates = [
+      payload?.token,
+      payload?.accessToken,
+      payload?.jwt,
+      payload?.authToken,
+      payload?.data?.token,
+      payload?.data?.accessToken,
+      payload?.data?.jwt,
+      payload?.data?.authToken,
+      payload?.result?.token,
+      payload?.result?.accessToken,
+      payload?.payload?.token,
+      payload?.payload?.accessToken,
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = String(candidate || "").trim();
+      if (normalized) return normalized;
+    }
+
+    return "";
+  };
+
   const findNestedMatch = (value, predicate, depth = 0, seen = new Set()) => {
     if (depth > 5 || value == null) return null;
 
@@ -730,20 +756,20 @@ export function MusicProvider({ children }) {
         const authPayload = extractAuthPayload(response.data);
         let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
 
-        const resolvedToken =
-          typeof authPayload?.token === "string"
-            ? authPayload.token.trim()
-            : typeof authPayload?.accessToken === "string"
-              ? authPayload.accessToken.trim()
-              : "";
+        const resolvedToken = extractAuthToken(authPayload);
 
-        if (!normalizedUser) {
+        if (!normalizedUser || !resolvedToken) {
           try {
-            const profileResponse = await api.get(selectedFamily.profile, resolvedToken ? {
-              headers: {
-                Authorization: `Bearer ${resolvedToken}`,
-              },
-            } : undefined);
+            const profileResponse = await api.get(
+              selectedFamily.profile,
+              resolvedToken
+                ? {
+                    headers: {
+                      Authorization: `Bearer ${resolvedToken}`,
+                    },
+                  }
+                : undefined,
+            );
             normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
           } catch {
             return { ok: false };
@@ -1340,26 +1366,30 @@ export function MusicProvider({ children }) {
       activeAuthRoutesRef.current = selectedFamily;
 
       const authPayload = extractAuthPayload(response.data);
-      const resolvedToken =
-        typeof authPayload?.token === "string"
-          ? authPayload.token.trim()
-          : typeof authPayload?.accessToken === "string"
-            ? authPayload.accessToken.trim()
-            : "";
+      const resolvedToken = extractAuthToken(authPayload);
       let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
 
-      if (!normalizedUser) {
+      if (!normalizedUser || !resolvedToken) {
         try {
-          const profileResponse = await api.get(selectedFamily.profile);
+          const profileResponse = await api.get(
+            selectedFamily.profile,
+            resolvedToken
+              ? {
+                  headers: {
+                    Authorization: `Bearer ${resolvedToken}`,
+                  },
+                }
+              : undefined,
+          );
           normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
         } catch {
           normalizedUser = null;
         }
       }
 
-      // Some server deployments do not return auth payload on register.
-      // Reuse login/session validation path to complete backend authentication.
-      if (!normalizedUser) {
+      // Some server deployments may not establish session after register.
+      // Reuse login path to force a known-good session and token.
+      if (!normalizedUser || !resolvedToken) {
         const autoLoginSuccess = await loginUser(normalizedEmailInput, password);
         if (autoLoginSuccess) {
           setAuthError("");
