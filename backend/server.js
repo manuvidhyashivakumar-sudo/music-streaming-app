@@ -1,16 +1,23 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const songRoutes = require("./routes/songRoutes");
 const playlistRoutes = require("./routes/playlistRoutes");
 const authRoutes = require("./routes/authRoutes");
 const connectDB = require("./config/database");
 const { seedSongs } = require("./controllers/songController");
 const { seedDefaultUser } = require("./controllers/authController");
+const { getJwtSecret } = require("./utils/jwtSecret");
 require("dotenv").config();
 
 const app = express();
 
-process.env.JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+try {
+  getJwtSecret();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -68,10 +75,10 @@ app.use(
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-    exposedHeaders: ["Authorization", "X-Auth-Token"],
     credentials: true,
   }),
 );
+app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -100,11 +107,12 @@ const startServer = async () => {
   try {
     if (process.env.MONGO_URI) {
       await connectDB();
-      await seedDefaultUser();
       await seedSongs();
     } else {
       console.warn("MONGO_URI not set. Running in local fallback mode without MongoDB.");
     }
+
+    await seedDefaultUser();
   } catch (error) {
     console.warn("Database initialization skipped:", error.message);
   }

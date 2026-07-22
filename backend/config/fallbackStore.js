@@ -1,11 +1,13 @@
 const bcrypt = require("bcryptjs");
 
 const fallbackUsers = [];
+const fallbackSeedEmail = "user@example.com";
 
 const normalizeEmail = (email) => email.toLowerCase().trim();
 
 const ensureSeedUser = async () => {
-  if (fallbackUsers.length > 0) {
+  const existingSeedUser = fallbackUsers.find((entry) => normalizeEmail(entry.email) === fallbackSeedEmail);
+  if (existingSeedUser) {
     return fallbackUsers;
   }
 
@@ -13,7 +15,7 @@ const ensureSeedUser = async () => {
   fallbackUsers.push({
     id: "fallback-demo-user",
     name: "Demo User",
-    email: "user@example.com",
+    email: fallbackSeedEmail,
     password: hashedPassword,
   });
 

@@ -1,7 +1,11 @@
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const User = require("../models/User");
+const { fallbackUsers, normalizeEmail, ensureSeedUser } = require("../config/fallbackStore");
+const { getJwtSecret } = require("../utils/jwtSecret");
+const { setAuthCookie, clearAuthCookie } = require("../utils/authCookie");
 
 const normalizeAuthPayload = (payload = {}) => {
   const safePayload = payload && typeof payload === "object" ? payload : {};
@@ -13,29 +17,56 @@ const normalizeAuthPayload = (payload = {}) => {
 
 const isValidEmail = (email) => /^\S+@\S+\.\S+$/.test(email);
 
+const isDatabaseConnected = () => mongoose.connection.readyState === 1;
+
+const toFallbackUserResponse = (fallbackUser) => ({
+  id: fallbackUser.id,
+  _id: fallbackUser.id,
+  name: fallbackUser.name,
+  email: fallbackUser.email,
+});
+
+const createAuthResponse = (account, token) => {
+  const userId = String(account?._id || account?.id || "");
+  const userName = typeof account?.name === "string" ? account.name : "";
+  const userEmail = typeof account?.email === "string" ? account.email : "";
+
+  const safeToken = typeof token === "string" ? token.trim() : "";
+  if (!userId || !safeToken || !userName || !userEmail) {
+    throw new Error("Auth response contract violation");
+  }
+
+  return {
+    user: {
+      id: userId,
+      _id: userId,
+      name: userName,
+      email: userEmail,
+    },
+  };
+};
+
 exports.seedDefaultUser = async () => {
-  if (mongoose.connection.readyState !== 1) {
+  if (!isDatabaseConnected()) {
+    await ensureSeedUser();
     return;
   }
 
-  const count = await User.countDocuments();
-  if (count === 0) {
-    const defaultEmail = "user@example.com";
-    const existing = await User.findOne({ email: defaultEmail });
-    if (!existing) {
-      const hashedPassword = await bcrypt.hash("password123", 10);
-      await User.create({
-        name: "Demo User",
-        email: defaultEmail,
-        password: hashedPassword,
-      });
-      console.log("Seeded default user: user@example.com / password123");
-    }
+  const defaultEmail = "user@example.com";
+  const existing = await User.findOne({ email: defaultEmail });
+  if (!existing) {
+    const hashedPassword = await bcrypt.hash("password123", 10);
+    await User.create({
+      name: "Demo User",
+      email: defaultEmail,
+      password: hashedPassword,
+    });
+    console.log("Seeded default user: user@example.com / password123");
   }
 };
 
 const getUserModel = () => {
-  if (mongoose.connection.readyState !== 1) {
+  if (!isDatabaseConnected()) {
     return null;
   }
 
@@ -45,9 +76,7 @@ const getUserModel = () => {
 exports.register = async (req, res) => {
   try {
     const model = getUserModel();
-    if (!model) {
-      return res.status(503).json({ message: "Database is not connected." });
-    }
+    await ensureSeedUser();
 
     const { name, email, password } = normalizeAuthPayload(req.body);
     if (!name || !email || !password) {
@@ -62,31 +91,41 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: "Password must be at least 6 characters long." });
     }
 
-    const existingUser = await model.findOne({ email });
+    let existingUser = null;
+    if (model) {
+      existingUser = await model.findOne({ email });
+    } else {
+      existingUser = fallbackUsers.find((entry) => normalizeEmail(entry.email) === normalizeEmail(email)) || null;
+    }
+
     if (existingUser) {
       return res.status(409).json({ message: "Email is already registered. Please login instead." });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = await model.create({
-      name,
-      email,
-      password: hashedPassword,
-    });
+    let newUser = null;
 
-    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-    res.set("Authorization", `Bearer ${token}`);
-    res.set("X-Auth-Token", token);
-    res.status(201).json({
-      user: {
-        id: newUser._id,
-        _id: newUser._id,
-        name: newUser.name,
-        email: newUser.email,
-      },
-      accessToken: token,
-      token,
-    });
+    if (model) {
+      newUser = await model.create({
+        name,
+        email,
+        password: hashedPassword,
+      });
+    } else {
+      const fallbackUser = {
+        id: crypto.randomUUID(),
+        name,
+        email,
+        password: hashedPassword,
+      };
+      fallbackUsers.push(fallbackUser);
+      newUser = toFallbackUserResponse(fallbackUser);
+    }
+
+    const token = jwt.sign({ id: newUser._id || newUser.id }, getJwtSecret(), { expiresIn: "7d" });
+    const authResponse = createAuthResponse(newUser, token);
+    setAuthCookie(res, token);
+    res.status(201).json(authResponse);
   } catch (error) {
     res.status(500).json({ message: error.message || "Failed to register user." });
   }
@@ -95,9 +134,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const model = getUserModel();
-    if (!model) {
-      return res.status(503).json({ message: "Database is not connected." });
-    }
+    await ensureSeedUser();
 
     const { email, password } = normalizeAuthPayload(req.body);
     if (!email || !password) {
@@ -108,32 +145,43 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Please provide a valid email address." });
     }
 
-    const user = await model.findOne({ email });
+    let user = null;
+    if (model) {
+      user = await model.findOne({ email });
+    } else {
+      user = fallbackUsers.find((entry) => normalizeEmail(entry.email) === normalizeEmail(email)) || null;
+      if (user) {
+        user = toFallbackUserResponse(user);
+      }
+    }
+
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    let hashedPassword = user.password;
+    if (!hashedPassword && !model) {
+      const fallbackEntry = fallbackUsers.find((entry) => entry.id === user.id);
+      hashedPassword = fallbackEntry?.password;
+    }
+
+    const isMatch = await bcrypt.compare(password, hashedPassword || "");
     if (!isMatch) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-    res.set("Authorization", `Bearer ${token}`);
-    res.set("X-Auth-Token", token);
-    res.json({
-      user: {
-        id: user._id,
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-      },
-      accessToken: token,
-      token,
-    });
+    const token = jwt.sign({ id: user._id }, getJwtSecret(), { expiresIn: "7d" });
+    const authResponse = createAuthResponse(user, token);
+    setAuthCookie(res, token);
+    res.json(authResponse);
   } catch (error) {
     res.status(500).json({ message: error.message || "Failed to login." });
   }
+};
+
+exports.logout = async (req, res) => {
+  clearAuthCookie(res);
+  res.json({ message: "Logged out successfully." });
 };
 
 exports.getProfile = async (req, res) => {
@@ -151,9 +199,6 @@ exports.getProfile = async (req, res) => {
 exports.updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ message: "Database is not connected." });
-    }
 
     if (!req.user) {
       return res.status(401).json({ message: "Unauthorized" });
@@ -163,7 +208,31 @@ exports.updatePassword = async (req, res) => {
       return res.status(400).json({ message: "Current and new passwords are required." });
     }
 
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters long." });
+    }
+
+    if (!isDatabaseConnected()) {
+      await ensureSeedUser();
+      const fallbackUser = fallbackUsers.find((entry) => entry.id === String(req.user.id || req.user._id));
+      if (!fallbackUser) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const isMatch = await bcrypt.compare(currentPassword, fallbackUser.password);
+      if (!isMatch) {
+        return res.status(401).json({ message: "Current password is incorrect." });
+      }
+
+      fallbackUser.password = await bcrypt.hash(newPassword, 10);
+      return res.json({ message: "Password updated successfully." });
+    }
+
     const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: "Current password is incorrect." });

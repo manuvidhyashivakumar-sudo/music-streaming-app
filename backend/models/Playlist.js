@@ -12,10 +12,29 @@ const playlistSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    description: {
+      type: String,
+      default: "",
+    },
+    privacy: {
+      type: String,
+      enum: ["private", "public", "unlisted"],
+      default: "private",
+    },
+    isPublic: {
+      type: Boolean,
+      default: false,
+    },
     songs: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Song",
+      },
+    ],
+    likedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
       },
     ],
     likes: {

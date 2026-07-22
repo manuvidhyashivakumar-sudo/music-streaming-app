@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { useMusic } from "../context/MusicContext";
 
 export default function Profile() {
-  const { user, token, isAuthReady, logoutUser, updatePassword, authError, setAuthError } = useMusic();
+  const { user, authDebug, isAuthReady, logoutUser, updatePassword, authError, setAuthError } = useMusic();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const navigate = useNavigate();
 
-  if (!isAuthReady && token) {
+  if (!isAuthReady) {
     return (
       <div className="mx-auto max-w-2xl rounded-3xl border border-slate-800 bg-slate-900 p-8 text-center">
         <p className="text-sm uppercase tracking-[0.3em] text-green-400">Profile</p>
@@ -24,6 +24,13 @@ export default function Profile() {
         <p className="text-sm uppercase tracking-[0.3em] text-green-400">Profile</p>
         <h1 className="mt-4 text-3xl font-bold text-white">You are not signed in</h1>
         <p className="mt-4 text-slate-400">Please sign in or register to view and manage your profile.</p>
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-left text-xs text-slate-300">
+          <p>Auth debug</p>
+          <p>API: {authDebug?.apiBaseUrl || "unknown"}</p>
+          <p>session cookie mode: {authDebug?.sessionCookieMode ? "true" : "false"}</p>
+          <p>user present: {authDebug?.userPresent ? "true" : "false"}</p>
+          <p>auth ready: {authDebug?.isAuthReady ? "true" : "false"}</p>
+        </div>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
           <button
             type="button"
@@ -62,8 +69,8 @@ export default function Profile() {
           </div>
           <button
             type="button"
-            onClick={() => {
-              logoutUser();
+            onClick={async () => {
+              await logoutUser();
               navigate("/");
             }}
             className="rounded-3xl border border-slate-800 bg-slate-900 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:bg-slate-800"

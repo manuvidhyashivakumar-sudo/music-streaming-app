@@ -3,10 +3,17 @@ import axios from "axios";
 
 const getApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_URL?.trim();
-  const hostname = typeof window !== "undefined" ? window.location.hostname : "";
-  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(hostname);
+  const localDevFallback = "http://localhost:5000/api";
+  const deployedFallback = "https://music-streaming-app.onrender.com/api";
 
-  if (configured && !configured.includes("localhost") && !configured.includes("127.0.0.1")) {
+  if (import.meta.env.DEV) {
+    const allowRemoteDevApi = String(import.meta.env.VITE_ALLOW_REMOTE_DEV_API || "").toLowerCase() === "true";
+    if (!allowRemoteDevApi) {
+      return localDevFallback;
+    }
+  }
+
+  if (configured) {
     const cleanedConfigured = configured.replace(/\/$/, "");
     if (/^https?:\/\//i.test(cleanedConfigured) && !/\/api(\/|$)/i.test(cleanedConfigured)) {
       return `${cleanedConfigured}/api`;
@@ -14,11 +21,11 @@ const getApiBaseUrl = () => {
     return cleanedConfigured;
   }
 
-  if (isLocalHost) {
-    return "/api";
+  if (import.meta.env.DEV) {
+    return localDevFallback;
   }
 
-  return "https://music-streaming-app.onrender.com/api";
+  return deployedFallback;
 };
 
 const api = axios.create({
@@ -27,7 +34,87 @@ const api = axios.create({
   withCredentials: true,
 });
 
+const normalizeApiBaseUrl = (rawUrl = "") => {
+  const value = String(rawUrl || "").trim().replace(/\/$/, "");
+  if (!value || !/^https?:\/\//i.test(value)) return "";
+  return value;
+};
+
+const buildApiBaseCandidates = () => {
+  const prefixCandidates = ["", "/api", "/v1", "/api/v1"];
+  const seedUrls = [
+    import.meta.env.VITE_API_URL,
+    import.meta.env.VITE_PROXY_TARGET,
+    getApiBaseUrl(),
+    "https://music-streaming-app.onrender.com",
+    "https://music-streaming-backend.onrender.com",
+    "https://music-streaming-api.onrender.com",
+    "https://musicify-backend.onrender.com",
+  ]
+    .map(normalizeApiBaseUrl)
+    .filter(Boolean);
+
+  const seen = new Set();
+  const candidates = [];
+
+  for (const seed of seedUrls) {
+    try {
+      const parsed = new URL(seed);
+      const origin = parsed.origin;
+      const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname.replace(/\/$/, "") : "";
+
+      if (path) {
+        const seededPathCandidate = `${origin}${path}`;
+        if (!seen.has(seededPathCandidate)) {
+          seen.add(seededPathCandidate);
+          candidates.push(seededPathCandidate);
+        }
+      }
+
+      for (const prefix of prefixCandidates) {
+        const candidate = `${origin}${prefix}`;
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+        candidates.push(candidate);
+      }
+    } catch {
+      // Ignore invalid URLs in env values.
+    }
+  }
+
+  return candidates;
+};
+
 const MusicContext = createContext();
+
+const authRouteFamilies = [
+  {
+    login: "/auth/login",
+    register: "/auth/register",
+    profile: "/auth/profile",
+  },
+  {
+    login: "/users/login",
+    register: "/users/register",
+    profile: "/users/profile",
+  },
+];
+
+const isNonApiResponse = (data, headers = {}) => {
+  const contentType = String(headers?.["content-type"] || headers?.["Content-Type"] || "").toLowerCase();
+  if (contentType.includes("text/html")) return true;
+
+  if (typeof data === "string") {
+    const value = data.trim().toLowerCase();
+    if (!value) return false;
+    if (value.startsWith("<!doctype html") || value.startsWith("<html")) return true;
+    if (value.includes("welcome to our music app") || value.includes("welcome to the music streaming platform api")) {
+      return true;
+    }
+  }
+
+  return false;
+};
 
 const normalizeUser = (account) => {
   if (!account || typeof account !== "object") return null;
@@ -291,15 +378,66 @@ export function MusicProvider({ children }) {
   const [volume, setVolume] = useState(0.75);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(false);
+  const [activeQueueSongIds, setActiveQueueSongIds] = useState([]);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState(null);
   const [selectedGenre, setSelectedGenre] = useState("");
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(true);
   const [authError, setAuthError] = useState("");
   const [isLoadingSongs, setIsLoadingSongs] = useState(true);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(true);
+  const [playlistCounterPulse, setPlaylistCounterPulse] = useState({ id: null, tick: 0 });
   const audioRef = useRef(null);
+  const playlistPulseTimerRef = useRef(null);
+  const activeAuthRoutesRef = useRef(authRouteFamilies[0]);
+  const latestAuthCheckRef = useRef(0);
+  const playlistHydrationRef = useRef(new Set());
+
+  const getAuthConfig = useCallback(() => {
+    return {};
+  }, []);
+
+  const fetchProfileWithFallback = useCallback(async (requestConfig = {}) => {
+    let lastError = null;
+
+    const primary = activeAuthRoutesRef.current || authRouteFamilies[0];
+    const orderedFamilies = [primary, ...authRouteFamilies.filter((entry) => entry.profile !== primary.profile)];
+
+    for (const family of orderedFamilies) {
+      try {
+        const response = await api.get(family.profile, requestConfig);
+        if (isNonApiResponse(response.data, response.headers)) {
+          continue;
+        }
+        activeAuthRoutesRef.current = family;
+        return response;
+      } catch (error) {
+        const status = error?.response?.status;
+        lastError = error;
+        if (status && status !== 404 && status !== 405) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error("Unable to fetch profile.");
+  }, []);
+
+  const triggerPlaylistCounterPulse = (playlistId) => {
+    if (!playlistId) return;
+    const normalizedId = String(playlistId);
+    const tick = Date.now();
+    setPlaylistCounterPulse({ id: normalizedId, tick });
+    if (playlistPulseTimerRef.current) {
+      window.clearTimeout(playlistPulseTimerRef.current);
+    }
+    playlistPulseTimerRef.current = window.setTimeout(() => {
+      setPlaylistCounterPulse((previous) =>
+        previous.id === normalizedId ? { id: null, tick: previous.tick } : previous,
+      );
+      playlistPulseTimerRef.current = null;
+    }, 900);
+  };
 
   const normalizeSong = (song) => {
     if (!song || typeof song !== "object") return null;
@@ -321,9 +459,46 @@ export function MusicProvider({ children }) {
     return String(songOrId || "");
   };
 
+  const isMongoObjectId = (value) => /^[a-f\d]{24}$/i.test(String(value || ""));
+
+  const resolveBackendSongId = async (songOrId) => {
+    const directId = getSongIdentifier(songOrId);
+    if (isMongoObjectId(directId)) return directId;
+
+    if (!songOrId || typeof songOrId !== "object") return directId;
+
+    const title = String(songOrId.title || "").trim();
+    const artist = String(songOrId.artist || "").trim();
+    if (!title) return directId;
+
+    try {
+      const response = await api.get("/songs", {
+        params: { search: `${title} ${artist}`.trim() },
+      });
+      const backendSongs = Array.isArray(response.data) ? response.data : [response.data].filter(Boolean);
+      const normalizedSongs = backendSongs.map(normalizeSong).filter(Boolean);
+      const matchedSong = normalizedSongs.find(
+        (candidate) =>
+          candidate.title?.toLowerCase() === title.toLowerCase() &&
+          (artist ? candidate.artist?.toLowerCase() === artist.toLowerCase() : true),
+      );
+
+      const resolvedId = matchedSong?._id;
+      return resolvedId ? String(resolvedId) : directId;
+    } catch {
+      return directId;
+    }
+  };
+
   const normalizePlaylist = (playlist) => {
     if (!playlist || typeof playlist !== "object") {
-      return { id: `playlist-${Date.now()}`, title: "Untitled playlist", songs: [] };
+      return {
+        id: `playlist-${Date.now()}`,
+        title: "Untitled playlist",
+        songs: [],
+        songDetails: [],
+        songCount: 0,
+      };
     }
 
     const normalizedTitle =
@@ -333,15 +508,61 @@ export function MusicProvider({ children }) {
       playlist.label ||
       "Untitled playlist";
 
+    const rawSongs = Array.isArray(playlist.songs) ? playlist.songs : [];
+    const extractRawSongId = (song) => {
+      if (!song) return "";
+      if (typeof song === "string") return song;
+
+      if (typeof song === "object") {
+        const idCandidate = song._id || song.id || song.songId;
+        if (idCandidate) return String(idCandidate);
+
+        const asString = typeof song.toString === "function" ? String(song.toString()) : "";
+        if (asString && asString !== "[object Object]") return asString;
+      }
+
+      return "";
+    };
+
+    const looksLikeFullSongObject = (song) =>
+      Boolean(
+        song &&
+          typeof song === "object" &&
+          (song.title || song.artist || song.audioUrl || song.imageUrl || song.album || song.genre),
+      );
+
+    const songDetails = rawSongs
+      .map((song) => (looksLikeFullSongObject(song) ? normalizeSong(song) : null))
+      .filter(Boolean);
+
+    const songIds = rawSongs
+      .map((song) => extractRawSongId(song))
+      .map((songId) => (songId ? String(songId) : ""))
+      .filter(Boolean);
+
     return {
       id: playlist._id || playlist.id || `playlist-${Date.now()}`,
       title: normalizedTitle,
+      description: typeof playlist.description === "string" ? playlist.description : "",
+      privacy: ["private", "public", "unlisted"].includes(playlist.privacy)
+        ? playlist.privacy
+        : playlist.isPublic
+          ? "public"
+          : "private",
+      isPublic:
+        typeof playlist.isPublic === "boolean"
+          ? playlist.isPublic
+          : (playlist.privacy || "private") === "public",
+      createdAt: playlist.createdAt || "",
+      updatedAt: playlist.updatedAt || "",
+      likedBy: Array.isArray(playlist.likedBy)
+        ? playlist.likedBy.map((entry) => String(entry || "")).filter(Boolean)
+        : [],
       likes: typeof playlist.likes === "number" ? playlist.likes : 0,
       comments: Array.isArray(playlist.comments) ? playlist.comments : [],
-      songs: (playlist.songs || [])
-        .map((song) => (typeof song === "string" ? song : song?._id || song?.id || song?.songId))
-        .map((songId) => (songId ? String(songId) : ""))
-        .filter(Boolean),
+      songs: songIds,
+      songDetails,
+      songCount: Math.max(songIds.length, songDetails.length, Number(playlist.songCount) || 0),
     };
   };
 
@@ -400,52 +621,15 @@ export function MusicProvider({ children }) {
     return null;
   };
 
-  const looksLikeJwt = (value) =>
-    typeof value === "string" && value.split(".").length === 3 && value.length > 20;
-
-  const extractTokenFromPayload = (payload, headers = {}) => {
-    const authHeader =
-      headers?.authorization ||
-      headers?.Authorization ||
-      headers?.Authorization?.toString?.();
-    const tokenHeader = headers?.["x-auth-token"] || headers?.["X-Auth-Token"] || "";
-
-    const bearerToken = typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    return (
-      payload?.token ||
-      payload?.accessToken ||
-      payload?.access_token ||
-      payload?.jwt ||
-      payload?.authToken ||
-      payload?.idToken ||
-      payload?.data?.token ||
-      payload?.data?.accessToken ||
-      payload?.data?.access_token ||
-      payload?.data?.jwt ||
-      payload?.data?.authToken ||
-      payload?.auth?.token ||
-      payload?.auth?.accessToken ||
-      findNestedMatch(
-        payload,
-        (candidate) =>
-          typeof candidate === "string" &&
-          (looksLikeJwt(candidate) || candidate.startsWith("eyJ")),
-      ) ||
-      tokenHeader ||
-      bearerToken ||
-      ""
-    );
-  };
-
   const extractUserFromPayload = (payload) => {
     return (
       payload?.user ||
+      payload?.data?.user ||
+      payload?.profile?.user ||
+      payload?.result?.data?.user ||
+      payload?.account?.user ||
       payload?.account ||
       payload?.profile ||
-      payload?.data?.user ||
       payload?.data?.account ||
       payload?.data?.profile ||
       payload?.data?.currentUser ||
@@ -464,6 +648,158 @@ export function MusicProvider({ children }) {
       null
     );
   };
+
+  const resolveLoginAgainstBase = useCallback(
+    async (baseUrl, normalizedEmailInput, password) => {
+      const previousBaseUrl = api.defaults.baseURL;
+
+      api.defaults.baseURL = baseUrl;
+
+      try {
+        let response = null;
+        let selectedFamily = null;
+        const primary = activeAuthRoutesRef.current || authRouteFamilies[0];
+        const orderedFamilies = [primary, ...authRouteFamilies.filter((entry) => entry.login !== primary.login)];
+
+        for (const family of orderedFamilies) {
+          try {
+            response = await api.post(family.login, {
+              email: normalizedEmailInput,
+              password,
+            });
+            if (isNonApiResponse(response.data, response.headers)) {
+              response = null;
+              continue;
+            }
+            selectedFamily = family;
+            break;
+          } catch (error) {
+            const status = error?.response?.status;
+            if (status && status !== 404 && status !== 405) {
+              throw error;
+            }
+          }
+        }
+
+        if (!response || !selectedFamily) {
+          return { ok: false };
+        }
+
+        activeAuthRoutesRef.current = selectedFamily;
+
+        const authPayload = extractAuthPayload(response.data);
+        let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
+
+        if (!normalizedUser) {
+          try {
+            const profileResponse = await api.get(selectedFamily.profile);
+            normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
+          } catch {
+            return { ok: false };
+          }
+        }
+
+        return {
+          ok: true,
+          baseUrl,
+          user: normalizedUser,
+        };
+      } catch {
+        return { ok: false };
+      } finally {
+        api.defaults.baseURL = previousBaseUrl;
+      }
+    },
+    [],
+  );
+
+  const resolveLoginWithFallbackBases = useCallback(
+    async (normalizedEmailInput, password) => {
+      const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
+      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean);
+      const seen = new Set();
+
+      for (const candidate of candidates) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+
+        const result = await resolveLoginAgainstBase(candidate, normalizedEmailInput, password);
+        if (result.ok) {
+          api.defaults.baseURL = candidate;
+          return result;
+        }
+      }
+
+      return { ok: false };
+    },
+    [resolveLoginAgainstBase],
+  );
+
+  const resolveRegisterAgainstBase = useCallback(
+    async (baseUrl, payload) => {
+      const previousBaseUrl = api.defaults.baseURL;
+
+      api.defaults.baseURL = baseUrl;
+
+      try {
+        let response = null;
+        let selectedFamily = null;
+        const primary = activeAuthRoutesRef.current || authRouteFamilies[0];
+        const orderedFamilies = [primary, ...authRouteFamilies.filter((entry) => entry.register !== primary.register)];
+
+        for (const family of orderedFamilies) {
+          try {
+            response = await api.post(family.register, payload);
+            if (isNonApiResponse(response.data, response.headers)) {
+              response = null;
+              continue;
+            }
+            selectedFamily = family;
+            break;
+          } catch (error) {
+            const status = error?.response?.status;
+            if (status && status !== 404 && status !== 405) {
+              throw error;
+            }
+          }
+        }
+
+        if (!response || !selectedFamily) {
+          return { ok: false };
+        }
+
+        activeAuthRoutesRef.current = selectedFamily;
+        return { ok: true, response, selectedFamily, baseUrl };
+      } catch (error) {
+        throw error;
+      } finally {
+        api.defaults.baseURL = previousBaseUrl;
+      }
+    },
+    [],
+  );
+
+  const resolveRegisterWithFallbackBases = useCallback(
+    async (payload) => {
+      const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
+      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean);
+      const seen = new Set();
+
+      for (const candidate of candidates) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+
+        const result = await resolveRegisterAgainstBase(candidate, payload);
+        if (result.ok) {
+          api.defaults.baseURL = candidate;
+          return result;
+        }
+      }
+
+      return { ok: false };
+    },
+    [resolveRegisterAgainstBase],
+  );
 
   const loadSongs = useCallback(async (query = "") => {
     setIsLoadingSongs(true);
@@ -487,7 +823,7 @@ export function MusicProvider({ children }) {
   }, []);
 
   const loadPlaylists = useCallback(async () => {
-    if (!token) {
+    if (!user) {
       setPlaylists([]);
       setSelectedPlaylistId(null);
       setIsLoadingPlaylists(false);
@@ -496,11 +832,7 @@ export function MusicProvider({ children }) {
 
     setIsLoadingPlaylists(true);
     try {
-      const response = await api.get("/playlists", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await api.get("/playlists", getAuthConfig());
       const payload = response.data;
       const backendPlaylists = Array.isArray(payload)
         ? payload
@@ -528,7 +860,36 @@ export function MusicProvider({ children }) {
       }
     }
     setIsLoadingPlaylists(false);
-  }, [token]);
+  }, [getAuthConfig, user]);
+
+  const refreshPlaylistById = useCallback(
+    async (playlistId) => {
+      const normalizedPlaylistId = String(playlistId || "").trim();
+      if (!normalizedPlaylistId || !user) return null;
+
+      try {
+        const response = await api.get(`/playlists/${normalizedPlaylistId}`, getAuthConfig());
+        const payload = extractPlaylistPayload(response.data);
+        const refreshedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] });
+
+        setPlaylists((previous) => {
+          const exists = previous.some((entry) => String(entry.id || entry._id) === normalizedPlaylistId);
+          if (!exists) {
+            return [...previous, refreshedPlaylist];
+          }
+
+          return previous.map((entry) =>
+            String(entry.id || entry._id) === normalizedPlaylistId ? refreshedPlaylist : entry,
+          );
+        });
+
+        return refreshedPlaylist;
+      } catch {
+        return null;
+      }
+    },
+    [getAuthConfig, user],
+  );
 
   useEffect(() => {
     loadSongs("");
@@ -536,7 +897,7 @@ export function MusicProvider({ children }) {
   }, [loadSongs]);
 
   useEffect(() => {
-    if (!token || !user) {
+    if (!user) {
       setPlaylists([]);
       setSelectedPlaylistId(null);
       setIsLoadingPlaylists(false);
@@ -544,7 +905,7 @@ export function MusicProvider({ children }) {
     }
 
     loadPlaylists();
-  }, [loadPlaylists, token, user]);
+  }, [loadPlaylists, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -555,35 +916,44 @@ export function MusicProvider({ children }) {
   }, [loadSongs, searchTerm]);
 
   useEffect(() => {
-    if (token) {
-      setIsAuthReady(false);
-      api.defaults.headers.common.Authorization = `Bearer ${token}`;
-      const fetchProfile = async () => {
-        try {
-          const response = await api.get("/auth/profile");
-          const profileUser = normalizeUser(response.data?.user || response.data);
-          if (profileUser) {
-            setUser(profileUser);
-            setAuthError("");
-          }
-        } catch (error) {
-          const status = error.response?.status;
-          if (status === 401 || status === 403) {
-            setToken(null);
-            setUser(null);
-          } else {
-            setAuthError(error.response?.data?.message || "Unable to validate session.");
-          }
-        } finally {
+    const authCheckId = latestAuthCheckRef.current + 1;
+    latestAuthCheckRef.current = authCheckId;
+    setIsAuthReady(false);
+
+    const fetchProfile = async () => {
+      try {
+        const response = await fetchProfileWithFallback(getAuthConfig());
+        if (latestAuthCheckRef.current !== authCheckId) {
+          return;
+        }
+
+        const profileUser = normalizeUser(response.data?.user || response.data);
+        if (profileUser) {
+          setUser(profileUser);
+          setAuthError("");
+        } else {
+          setUser(null);
+        }
+      } catch (error) {
+        if (latestAuthCheckRef.current !== authCheckId) {
+          return;
+        }
+
+        const status = error.response?.status;
+        if (status === 401 || status === 403) {
+          setUser(null);
+        } else {
+          setAuthError(error.response?.data?.message || "Unable to validate session.");
+        }
+      } finally {
+        if (latestAuthCheckRef.current === authCheckId) {
           setIsAuthReady(true);
         }
-      };
-      fetchProfile();
-    } else {
-      delete api.defaults.headers.common.Authorization;
-      setIsAuthReady(true);
-    }
-  }, [token]);
+      }
+    };
+
+    fetchProfile();
+  }, [fetchProfileWithFallback, getAuthConfig]);
 
   useEffect(() => {
     if (!currentSong && songs.length) {
@@ -608,6 +978,90 @@ export function MusicProvider({ children }) {
   }, [playlists, selectedPlaylistId]);
 
   useEffect(() => {
+    if (!selectedPlaylistId || !user) return;
+
+    const selected = playlists.find(
+      (playlist) => String(playlist.id || playlist._id) === String(selectedPlaylistId),
+    );
+
+    if (!selected || !Array.isArray(selected.songs) || !selected.songs.length) return;
+
+    const selectedId = String(selected.id || selected._id || "");
+    const hydrationKey = `${selectedId}:${selected.songs.join(",")}`;
+    if (playlistHydrationRef.current.has(hydrationKey)) {
+      return;
+    }
+
+    const detailIdSet = new Set(
+      (selected.songDetails || [])
+        .map((song) => String(song?._id || song?.id || ""))
+        .filter(Boolean),
+    );
+
+    const missingSongIds = selected.songs.filter((songId) => !detailIdSet.has(String(songId)));
+    if (!missingSongIds.length) {
+      playlistHydrationRef.current.add(hydrationKey);
+      return;
+    }
+
+    playlistHydrationRef.current.add(hydrationKey);
+
+    const hydrateSongs = async () => {
+      try {
+        const responses = await Promise.all(
+          missingSongIds.map(async (songId) => {
+            try {
+              const response = await api.get(`/songs/${songId}`);
+              return normalizeSong(response.data);
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        const hydratedSongs = responses.filter(Boolean);
+        if (!hydratedSongs.length) {
+          return;
+        }
+
+        setPlaylists((previous) =>
+          previous.map((playlist) => {
+            const playlistId = String(playlist.id || playlist._id || "");
+            if (playlistId !== selectedId) return playlist;
+
+            const existingById = new Map(
+              (playlist.songDetails || [])
+                .map((song) => [String(song?._id || song?.id || ""), song])
+                .filter(([songId]) => Boolean(songId)),
+            );
+
+            for (const song of hydratedSongs) {
+              const songId = String(song?._id || song?.id || "");
+              if (songId) {
+                existingById.set(songId, song);
+              }
+            }
+
+            const orderedSongDetails = (playlist.songs || [])
+              .map((songId) => existingById.get(String(songId)))
+              .filter(Boolean);
+
+            return {
+              ...playlist,
+              songDetails: orderedSongDetails,
+              songCount: (playlist.songs || []).length,
+            };
+          }),
+        );
+      } finally {
+        // Keep hydration key to avoid repeated network loops.
+      }
+    };
+
+    hydrateSongs();
+  }, [playlists, selectedPlaylistId, user]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.volume = volume;
@@ -622,6 +1076,15 @@ export function MusicProvider({ children }) {
       audio.pause();
     }
   }, [currentSong, isPlaying, volume]);
+
+  useEffect(
+    () => () => {
+      if (playlistPulseTimerRef.current) {
+        window.clearTimeout(playlistPulseTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const searchResults = useMemo(
     () =>
@@ -650,12 +1113,67 @@ export function MusicProvider({ children }) {
       return;
     }
 
+    setActiveQueueSongIds([]);
     setCurrentSong(song);
     setIsPlaying(true);
   };
 
+  const buildQueueFromIds = useCallback(
+    (queueIds = []) => {
+      if (!Array.isArray(queueIds) || !queueIds.length) return [];
+
+      const songsById = new Map(
+        songs
+          .map((song) => [String(song?._id || song?.id || ""), normalizeSong(song)])
+          .filter(([songId, song]) => Boolean(songId && song)),
+      );
+
+      return queueIds
+        .map((songId) => songsById.get(String(songId || "")) || null)
+        .filter(Boolean);
+    },
+    [songs],
+  );
+
+  const playPlaylist = useCallback(
+    (playlistItems = [], options = {}) => {
+      const normalizedSongs = Array.isArray(playlistItems)
+        ? playlistItems.map((song) => normalizeSong(song)).filter(Boolean)
+        : [];
+      if (!normalizedSongs.length) {
+        return false;
+      }
+
+      const shouldShuffle = Boolean(options?.shuffle);
+      const queueSongs = shouldShuffle
+        ? [...normalizedSongs].sort(() => Math.random() - 0.5)
+        : normalizedSongs;
+      const queueIds = queueSongs
+        .map((song) => String(song?._id || song?.id || ""))
+        .filter(Boolean);
+
+      setActiveQueueSongIds(queueIds);
+      setCurrentSong(queueSongs[0]);
+      setIsPlaying(true);
+      return true;
+    },
+    [],
+  );
+
   const nextTrack = () => {
-    if (!songs.length || !currentSong) return;
+    if (!currentSong) return;
+
+    const queuedSongs = buildQueueFromIds(activeQueueSongIds);
+    if (queuedSongs.length) {
+      const currentIndex = queuedSongs.findIndex((song) => String(song?._id || song?.id || "") === String(currentSong?._id || currentSong?.id || ""));
+      const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextIndex = safeIndex + 1 >= queuedSongs.length ? 0 : safeIndex + 1;
+      setCurrentSong(queuedSongs[nextIndex]);
+      setIsPlaying(true);
+      return;
+    }
+
+    if (!songs.length) return;
     const currentIndex = songs.findIndex((song) => song._id === currentSong._id);
     let nextIndex = currentIndex + 1;
     if (nextIndex >= songs.length) {
@@ -666,7 +1184,19 @@ export function MusicProvider({ children }) {
   };
 
   const prevTrack = () => {
-    if (!songs.length || !currentSong) return;
+    if (!currentSong) return;
+
+    const queuedSongs = buildQueueFromIds(activeQueueSongIds);
+    if (queuedSongs.length) {
+      const currentIndex = queuedSongs.findIndex((song) => String(song?._id || song?.id || "") === String(currentSong?._id || currentSong?.id || ""));
+      const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+      const prevIndex = safeIndex - 1 < 0 ? queuedSongs.length - 1 : safeIndex - 1;
+      setCurrentSong(queuedSongs[prevIndex]);
+      setIsPlaying(true);
+      return;
+    }
+
+    if (!songs.length) return;
     const currentIndex = songs.findIndex((song) => song._id === currentSong._id);
     let prevIndex = currentIndex - 1;
     if (prevIndex < 0) {
@@ -686,7 +1216,10 @@ export function MusicProvider({ children }) {
     }
 
     if (shuffle) {
-      const nextSong = songs[Math.floor(Math.random() * songs.length)];
+      const queuedSongs = buildQueueFromIds(activeQueueSongIds);
+      const sourceSongs = queuedSongs.length ? queuedSongs : songs;
+      if (!sourceSongs.length) return;
+      const nextSong = sourceSongs[Math.floor(Math.random() * sourceSongs.length)];
       setCurrentSong(nextSong);
       setIsPlaying(true);
       return;
@@ -698,32 +1231,12 @@ export function MusicProvider({ children }) {
   const loginUser = async (email, password) => {
     try {
       const normalizedEmailInput = email.trim().toLowerCase();
-      const response = await api.post("/auth/login", {
-        email: normalizedEmailInput,
-        password,
-      });
-
-      const authPayload = extractAuthPayload(response.data);
-      const nextToken = extractTokenFromPayload(authPayload, response.headers);
-      let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
-
-      if (nextToken && !normalizedUser) {
-        try {
-          const profileResponse = await api.get("/auth/profile", {
-            headers: { Authorization: `Bearer ${nextToken}` },
-          });
-          normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
-        } catch {
-          // Continue to unified validation below.
-        }
+      const loginResult = await resolveLoginWithFallbackBases(normalizedEmailInput, password);
+      if (!loginResult.ok) {
+        throw new Error("Login failed. Could not reach a valid backend auth endpoint.");
       }
 
-      if (!nextToken || !normalizedUser) {
-        throw new Error("Login failed. Backend did not return a valid token/user payload.");
-      }
-
-      setToken(nextToken);
-      setUser(normalizedUser);
+      setUser(loginResult.user || null);
       setAuthError("");
       return true;
     } catch (error) {
@@ -757,32 +1270,46 @@ export function MusicProvider({ children }) {
         return false;
       }
 
-      const response = await api.post("/auth/register", {
+      const registerResult = await resolveRegisterWithFallbackBases({
+        username: normalizedNameInput,
         name: normalizedNameInput,
         email: normalizedEmailInput,
         password,
       });
 
+      if (!registerResult.ok) {
+        throw new Error("No valid register endpoint found on backend server.");
+      }
+
+      const { response, selectedFamily } = registerResult;
+
+      activeAuthRoutesRef.current = selectedFamily;
+
       const authPayload = extractAuthPayload(response.data);
-      const nextToken = extractTokenFromPayload(authPayload, response.headers);
       let normalizedUser = normalizeUser(extractUserFromPayload(authPayload) || authPayload);
 
-      if (nextToken && !normalizedUser) {
+      if (!normalizedUser) {
         try {
-          const profileResponse = await api.get("/auth/profile", {
-            headers: { Authorization: `Bearer ${nextToken}` },
-          });
+          const profileResponse = await api.get(selectedFamily.profile);
           normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
         } catch {
-          // Continue to unified validation below.
+          normalizedUser = null;
         }
       }
 
-      if (!nextToken || !normalizedUser) {
-        throw new Error("Registration failed. Backend did not return a valid token/user payload.");
+      // Some server deployments do not return auth payload on register.
+      // Reuse login/session validation path to complete backend authentication.
+      if (!normalizedUser) {
+        const autoLoginSuccess = await loginUser(normalizedEmailInput, password);
+        if (autoLoginSuccess) {
+          setAuthError("");
+          return true;
+        }
+
+        setAuthError("Registration successful, but automatic login failed. Please login.");
+        return "requires-login";
       }
 
-      setToken(nextToken);
       setUser(normalizedUser);
       setAuthError("");
       return true;
@@ -803,14 +1330,18 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const logoutUser = () => {
+  const logoutUser = async () => {
+    try {
+      await api.post("/auth/logout", {});
+    } catch {
+      // Ignore logout API failures and still clear local state.
+    }
     setUser(null);
-    setToken(null);
     setAuthError("");
   };
 
   const updatePassword = async (currentPassword, newPassword) => {
-    if (!token) {
+    if (!user) {
       setAuthError("You must be logged in to update your password.");
       return false;
     }
@@ -819,7 +1350,7 @@ export function MusicProvider({ children }) {
       await api.patch(
         "/auth/profile/password",
         { currentPassword, newPassword },
-        { headers: { Authorization: `Bearer ${token}` } },
+        getAuthConfig(),
       );
       setAuthError("Password updated successfully.");
       return true;
@@ -902,24 +1433,30 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const createPlaylist = async (title) => {
-    const trimmed = title.trim();
+  const createPlaylist = async (title, options = {}) => {
+    const trimmed = String(title || "").trim();
     if (!trimmed) return null;
 
-    if (!token || !user) {
+    if (!user) {
       setAuthError("Please login to create a playlist.");
       return null;
     }
 
     try {
+      const normalizedPrivacy = ["private", "public", "unlisted"].includes(String(options?.privacy || "").toLowerCase())
+        ? String(options.privacy).toLowerCase()
+        : "private";
+      const normalizedDescription = String(options?.description || "").trim();
       const response = await api.post(
         "/playlists",
-        { title: trimmed, name: trimmed },
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          title: trimmed,
+          name: trimmed,
+          description: normalizedDescription,
+          privacy: normalizedPrivacy,
+          isPublic: normalizedPrivacy === "public",
         },
+        getAuthConfig(),
       );
       const payload = extractPlaylistPayload(response.data);
       const createdPlaylist = normalizePlaylist(payload || { title: trimmed });
@@ -937,13 +1474,77 @@ export function MusicProvider({ children }) {
     }
   };
 
-  const addToPlaylist = async (songOrId, playlistId) => {
-    const normalizedSongId = getSongIdentifier(songOrId);
-    if (!normalizedSongId) return;
+  const updatePlaylistDetails = async (playlistId, payload = {}) => {
+    if (!playlistId) return false;
 
-    if (!token || !user) {
+    if (!user) {
+      setAuthError("Please login to modify playlists.");
+      return false;
+    }
+
+    const normalizedPlaylistId = String(playlistId);
+    const updatePayload = {};
+
+    if (typeof payload.title === "string" && payload.title.trim()) {
+      updatePayload.title = payload.title.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "description")) {
+      updatePayload.description = String(payload.description || "").trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "privacy")) {
+      const normalizedPrivacy = String(payload.privacy || "").toLowerCase();
+      if (["private", "public", "unlisted"].includes(normalizedPrivacy)) {
+        updatePayload.privacy = normalizedPrivacy;
+        updatePayload.isPublic = normalizedPrivacy === "public";
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "isPublic") && typeof payload.isPublic === "boolean") {
+      updatePayload.isPublic = payload.isPublic;
+      if (!updatePayload.privacy) {
+        updatePayload.privacy = payload.isPublic ? "public" : "private";
+      }
+    }
+
+    if (!Object.keys(updatePayload).length) return false;
+
+    try {
+      const response = await api.put(
+        `/playlists/${normalizedPlaylistId}`,
+        updatePayload,
+        getAuthConfig(),
+      );
+
+      const payloadData = extractPlaylistPayload(response.data);
+      const fallbackBase =
+        playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId) ||
+        { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] };
+      const updatedPlaylist = normalizePlaylist(payloadData || { ...fallbackBase, ...updatePayload });
+
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+      return true;
+    } catch (error) {
+      setAuthError(error.response?.data?.message || "Unable to update playlist details.");
+      return false;
+    }
+  };
+
+  const addToPlaylist = async (songOrId, playlistId) => {
+    const normalizedSongId = await resolveBackendSongId(songOrId);
+    if (!normalizedSongId) {
+      return { ok: false, message: "Unable to resolve song." };
+    }
+
+    if (!user) {
       setAuthError("Please login to add songs to a playlist.");
-      return;
+      return { ok: false, message: "Please login to add songs to a playlist." };
     }
 
     const fallbackPlaylistId = playlists[0]?.id || playlists[0]?._id;
@@ -955,7 +1556,7 @@ export function MusicProvider({ children }) {
       const createdId = created?.id || created?._id;
       if (!createdId) {
         setAuthError("Unable to create a playlist. Please try again.");
-        return;
+        return { ok: false, message: "Unable to create a playlist. Please try again." };
       }
       resolvedPlaylistId = createdId;
       resolvedPlaylist = normalizePlaylist(created);
@@ -966,44 +1567,103 @@ export function MusicProvider({ children }) {
       resolvedPlaylist ||
       playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId) ||
       null;
-    if (!playlist) {
+    if (!playlist && !resolvedPlaylistId) {
       setAuthError("Please select a playlist first.");
-      return;
+      return { ok: false, message: "Please select a playlist first." };
     }
 
-    if (playlist.songs.some((id) => String(id) === normalizedSongId)) {
+    if (playlist?.songs?.some((id) => String(id) === normalizedSongId)) {
       setAuthError("Song already exists in this playlist.");
-      return;
+      return { ok: true, message: "Song already exists in this playlist." };
     }
 
     try {
       const response = await api.patch(
         `/playlists/${normalizedPlaylistId}/add`,
-        { songId: normalizedSongId },
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          songId: normalizedSongId,
+          song:
+            songOrId && typeof songOrId === "object"
+              ? {
+                  title: songOrId.title,
+                  artist: songOrId.artist,
+                  album: songOrId.album,
+                  genre: songOrId.genre,
+                  imageUrl: songOrId.imageUrl || songOrId.image,
+                  audioUrl: songOrId.audioUrl,
+                }
+              : undefined,
         },
+        getAuthConfig(),
       );
       const payload = extractPlaylistPayload(response.data);
-      const updatedPlaylist = normalizePlaylist(payload || { ...playlist, songs: [...playlist.songs, normalizedSongId] });
-
-      setPlaylists((previous) =>
-        previous.map((entry) =>
-          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
-        ),
+      const backendAdded = Boolean(response.data?.added ?? response.data?.data?.added ?? false);
+      const optimisticSongDetail =
+        songOrId && typeof songOrId === "object"
+          ? normalizeSong({
+              ...songOrId,
+              _id: normalizedSongId,
+              id: normalizedSongId,
+            })
+          : null;
+      const optimisticPlaylistBase = {
+        ...(playlist || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [], songDetails: [] }),
+        songs: [...(playlist?.songs || []), normalizedSongId],
+        songDetails: optimisticSongDetail
+          ? [...(playlist?.songDetails || []), optimisticSongDetail]
+          : [...(playlist?.songDetails || [])],
+      };
+      const normalizedPayload = payload ? normalizePlaylist(payload) : null;
+      const mergedSongs = normalizedPayload?.songs?.length
+        ? normalizedPayload.songs
+        : optimisticPlaylistBase.songs;
+      const mergedSongDetailsById = new Map(
+        [...(optimisticPlaylistBase.songDetails || []), ...(normalizedPayload?.songDetails || [])]
+          .map((song) => [String(song?._id || song?.id || ""), normalizeSong(song)])
+          .filter(([songId, song]) => Boolean(songId && song)),
       );
+      const mergedSongDetails = mergedSongs
+        .map((songId) => mergedSongDetailsById.get(String(songId || "")) || null)
+        .filter(Boolean);
+      const updatedPlaylist = normalizePlaylist({
+        ...optimisticPlaylistBase,
+        ...(normalizedPayload || {}),
+        songs: mergedSongs,
+        songDetails: mergedSongDetails,
+        songCount: Math.max(mergedSongs.length, mergedSongDetails.length, normalizedPayload?.songCount || 0),
+      });
+
+      setPlaylists((previous) => {
+        const exists = previous.some((entry) => String(entry.id || entry._id) === normalizedPlaylistId);
+        if (!exists) {
+          return [...previous, updatedPlaylist];
+        }
+        return previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        );
+      });
+
+      // Keep optimistic playlist state visible after add.
+      // Some backend responses can lag and temporarily report stale song counts.
+      if (backendAdded) {
+        triggerPlaylistCounterPulse(normalizedPlaylistId);
+      }
       setAuthError("");
+      return {
+        ok: true,
+        message: backendAdded ? "Song added to playlist." : "Song already exists in this playlist.",
+      };
     } catch (error) {
-      setAuthError(error.response?.data?.message || "Unable to add song to playlist.");
+      const message = error.response?.data?.message || "Unable to add song to playlist.";
+      setAuthError(message);
+      return { ok: false, message };
     }
   };
 
   const removeFromPlaylist = async (songId, playlistId) => {
     if (!songId || !playlistId) return;
 
-    if (!token || !user) {
+    if (!user) {
       setAuthError("Please login to modify playlists.");
       return;
     }
@@ -1015,11 +1675,7 @@ export function MusicProvider({ children }) {
       const response = await api.patch(
         `/playlists/${normalizedPlaylistId}/remove`,
         { songId: normalizedSongId },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+        getAuthConfig(),
       );
 
       const payload = extractPlaylistPayload(response.data);
@@ -1036,6 +1692,8 @@ export function MusicProvider({ children }) {
           String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
         ),
       );
+      await refreshPlaylistById(normalizedPlaylistId);
+      await loadPlaylists();
       setAuthError("");
     } catch (error) {
       setAuthError(error.response?.data?.message || "Unable to remove song from playlist.");
@@ -1045,27 +1703,36 @@ export function MusicProvider({ children }) {
   const renamePlaylist = async (playlistId, nextTitle) => {
     const trimmedTitle = String(nextTitle || "").trim();
     if (!playlistId || !trimmedTitle) return false;
+    return updatePlaylistDetails(playlistId, { title: trimmedTitle });
+  };
 
-    if (!token || !user) {
+  const updatePlaylistPrivacy = async (playlistId, privacy) => {
+    const normalizedPrivacy = String(privacy || "").trim().toLowerCase();
+    if (!playlistId || !["private", "public", "unlisted"].includes(normalizedPrivacy)) return false;
+    return updatePlaylistDetails(playlistId, { privacy: normalizedPrivacy });
+  };
+
+  const reorderPlaylistSongs = async (playlistId, orderedSongIds = []) => {
+    if (!playlistId || !Array.isArray(orderedSongIds) || !orderedSongIds.length) return false;
+
+    if (!user) {
       setAuthError("Please login to modify playlists.");
       return false;
     }
 
     const normalizedPlaylistId = String(playlistId);
+    const normalizedSongIds = orderedSongIds.map((entry) => String(entry || "")).filter(Boolean);
+    if (!normalizedSongIds.length) return false;
+
     try {
       const response = await api.patch(
-        `/playlists/${normalizedPlaylistId}`,
-        { title: trimmedTitle },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+        `/playlists/${normalizedPlaylistId}/reorder`,
+        { songIds: normalizedSongIds },
+        getAuthConfig(),
       );
 
       const payload = extractPlaylistPayload(response.data);
-      const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: trimmedTitle, songs: [] });
-
+      const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: normalizedSongIds });
       setPlaylists((previous) =>
         previous.map((entry) =>
           String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
@@ -1074,26 +1741,65 @@ export function MusicProvider({ children }) {
       setAuthError("");
       return true;
     } catch (error) {
-      setAuthError(error.response?.data?.message || "Unable to rename playlist.");
+      setAuthError(error.response?.data?.message || "Unable to reorder playlist songs.");
       return false;
+    }
+  };
+
+  const repairPlaylist = async (playlistId) => {
+    if (!playlistId) return { ok: false, repairedCount: 0 };
+
+    if (!user) {
+      setAuthError("Please login to modify playlists.");
+      return { ok: false, repairedCount: 0 };
+    }
+
+    const normalizedPlaylistId = String(playlistId);
+
+    try {
+      const response = await api.post(
+        `/playlists/${normalizedPlaylistId}/repair`,
+        {},
+        getAuthConfig(),
+      );
+
+      const payload = extractPlaylistPayload(response.data);
+      const updatedPlaylist = normalizePlaylist(
+        payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] },
+      );
+
+      setPlaylists((previous) =>
+        previous.map((entry) =>
+          String(entry.id || entry._id) === normalizedPlaylistId ? updatedPlaylist : entry,
+        ),
+      );
+      setAuthError("");
+
+      await refreshPlaylistById(normalizedPlaylistId);
+
+      return {
+        ok: true,
+        repairedCount: Number(response.data?.repairedCount) || 0,
+        songCount: Number(response.data?.songCount) || updatedPlaylist.songCount || 0,
+      };
+    } catch (error) {
+      const message = error.response?.data?.message || "Unable to repair playlist songs.";
+      setAuthError(message);
+      return { ok: false, repairedCount: 0, message };
     }
   };
 
   const deletePlaylist = async (playlistId) => {
     if (!playlistId) return false;
 
-    if (!token || !user) {
+    if (!user) {
       setAuthError("Please login to modify playlists.");
       return false;
     }
 
     const normalizedPlaylistId = String(playlistId);
     try {
-      await api.delete(`/playlists/${normalizedPlaylistId}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      await api.delete(`/playlists/${normalizedPlaylistId}`, getAuthConfig());
 
       setPlaylists((previous) =>
         previous.filter((entry) => String(entry.id || entry._id) !== normalizedPlaylistId),
@@ -1110,7 +1816,7 @@ export function MusicProvider({ children }) {
 
   const likePlaylist = async (playlistId) => {
     if (!playlistId) return false;
-    if (!token || !user) {
+    if (!user) {
       setAuthError("Please login to modify playlists.");
       return false;
     }
@@ -1120,11 +1826,7 @@ export function MusicProvider({ children }) {
       const response = await api.patch(
         `/playlists/${normalizedPlaylistId}/like`,
         {},
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+        getAuthConfig(),
       );
       const payload = extractPlaylistPayload(response.data);
       const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] });
@@ -1144,7 +1846,7 @@ export function MusicProvider({ children }) {
   const addPlaylistComment = async (playlistId, text) => {
     const commentText = String(text || "").trim();
     if (!playlistId || !commentText) return false;
-    if (!token || !user) {
+    if (!user) {
       setAuthError("Please login to modify playlists.");
       return false;
     }
@@ -1154,11 +1856,7 @@ export function MusicProvider({ children }) {
       const response = await api.post(
         `/playlists/${normalizedPlaylistId}/comments`,
         { text: commentText, user: user?.name || "Guest" },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+        getAuthConfig(),
       );
       const payload = extractPlaylistPayload(response.data);
       const updatedPlaylist = normalizePlaylist(payload || { id: normalizedPlaylistId, title: "Untitled playlist", songs: [] });
@@ -1175,14 +1873,55 @@ export function MusicProvider({ children }) {
     }
   };
 
+  const sharePlaylistUrl = (playlistId) => {
+    const normalizedPlaylistId = String(playlistId || "").trim();
+    if (!normalizedPlaylistId) return "";
+    if (typeof window === "undefined") return `/playlist/${normalizedPlaylistId}`;
+    return `${window.location.origin}/playlist/${normalizedPlaylistId}`;
+  };
+
   const selectedPlaylist =
     playlists.find((playlist) => String(playlist.id || playlist._id) === String(selectedPlaylistId)) || playlists[0] || null;
 
+  const authDebug = useMemo(
+    () => ({
+      apiBaseUrl: api.defaults.baseURL || "",
+      sessionCookieMode: true,
+      userPresent: Boolean(user),
+      isAuthReady,
+      authError,
+    }),
+    [user, isAuthReady, authError],
+  );
+
   const playlistSongs = useMemo(
-    () =>
-      songs.filter(
-        (song) => song && selectedPlaylist?.songs.some((songId) => String(songId) === getSongIdentifier(song)),
-      ),
+    () => {
+      if (!selectedPlaylist) return [];
+
+      const selectedSongIds = Array.isArray(selectedPlaylist.songs)
+        ? selectedPlaylist.songs.map((songId) => String(songId || "")).filter(Boolean)
+        : [];
+
+      if (!selectedSongIds.length) {
+        return [];
+      }
+
+      const detailsById = new Map(
+        (selectedPlaylist.songDetails || [])
+          .map((song) => [String(song?._id || song?.id || ""), normalizeSong(song)])
+          .filter(([songId, song]) => Boolean(songId && song)),
+      );
+
+      const songsById = new Map(
+        songs
+          .map((song) => [String(getSongIdentifier(song)), normalizeSong(song)])
+          .filter(([songId, song]) => Boolean(songId && song)),
+      );
+
+      return selectedSongIds
+        .map((songId) => detailsById.get(songId) || songsById.get(songId) || null)
+        .filter(Boolean);
+    },
     [songs, selectedPlaylist],
   );
 
@@ -1203,9 +1942,10 @@ export function MusicProvider({ children }) {
         playlists,
         selectedPlaylist,
         playlistSongs,
+        playlistCounterPulse,
         audioRef,
         user,
-        token,
+        authDebug,
         isAuthReady,
         authError,
         setAuthError,
@@ -1213,6 +1953,7 @@ export function MusicProvider({ children }) {
         isLoadingPlaylists,
         playSong,
         setIsPlaying,
+        playPlaylist,
         nextTrack,
         prevTrack,
         setVolume,
@@ -1224,9 +1965,14 @@ export function MusicProvider({ children }) {
         addToPlaylist,
         removeFromPlaylist,
         renamePlaylist,
+        updatePlaylistDetails,
+        updatePlaylistPrivacy,
+        reorderPlaylistSongs,
+        repairPlaylist,
         deletePlaylist,
         likePlaylist,
         addPlaylistComment,
+        sharePlaylistUrl,
         setSelectedPlaylistId,
         loginUser,
         registerUser,

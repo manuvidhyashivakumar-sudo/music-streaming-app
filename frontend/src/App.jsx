@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "react-hot-toast";
 import { MusicProvider } from "./context/MusicContext";
 import Sidebar from "./components/Sidebar";
 import Navbar from "./components/Navbar";
@@ -20,6 +21,16 @@ export default function App() {
     <MusicProvider>
       <BrowserRouter>
         <div className="min-h-screen bg-slate-950 text-slate-100">
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              style: {
+                background: "#0f172a",
+                color: "#e2e8f0",
+                border: "1px solid #1e293b",
+              },
+            }}
+          />
           <div className="lg:flex lg:min-h-screen">
             <aside className="hidden lg:block">
               <Sidebar />
@@ -34,6 +45,7 @@ export default function App() {
                   <Route path="/musicify" element={<MusicifyUI />} />
                   <Route path="/search" element={<Search />} />
                   <Route path="/playlists" element={<Playlist />} />
+                  <Route path="/playlist/:id" element={<Playlist />} />
                   <Route path="/player" element={<Player />} />
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/login" element={<Login />} />

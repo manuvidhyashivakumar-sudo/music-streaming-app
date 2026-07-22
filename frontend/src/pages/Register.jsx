@@ -3,13 +3,13 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { useMusic } from "../context/MusicContext";
 
 export default function Register() {
-  const { registerUser, user, token, isAuthReady, authError, setAuthError } = useMusic();
+  const { registerUser, user, isAuthReady, authError, setAuthError } = useMusic();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
 
-  if (!isAuthReady && token) {
+  if (!isAuthReady) {
     return (
       <div className="mx-auto max-w-2xl rounded-3xl border border-slate-800 bg-slate-900 p-8 text-center">
         <p className="text-sm uppercase tracking-[0.3em] text-green-400">Register</p>

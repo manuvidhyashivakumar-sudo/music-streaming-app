@@ -6,8 +6,8 @@ Full-stack music streaming application with account-based authentication, playli
 
 - Frontend: React + Vite + Axios + React Router
 - Backend: Node.js + Express
-- Database: MongoDB (with local fallback mode when `MONGO_URI` is not set)
-- Auth: JWT bearer token
+- Database: MongoDB (required for playlist persistence)
+- Auth: JWT in HttpOnly secure session cookie
 
 ## Repository Structure
 
@@ -27,6 +27,7 @@ Full-stack music streaming application with account-based authentication, playli
 
 - Playlist data is handled by the backend and associated with the logged-in user.
 - Playlists are not stored in shared browser `localStorage` anymore.
+- Authentication tokens are not stored in frontend local storage; the server sets an HttpOnly cookie.
 - The Add to Playlist action requires login and a selected/created playlist.
 
 ## Setup
@@ -42,8 +43,8 @@ npm run dev
 Environment variables:
 
 - `PORT` (optional, default `5000`)
-- `JWT_SECRET` (recommended for non-dev use)
-- `MONGO_URI` (required for registration/login and profile features)
+- `JWT_SECRET` (required in production; use a strong random value)
+- `MONGO_URI` (required for playlist CRUD)
 - `FRONTEND_URL` (optional, for CORS)
 
 ### 2. Frontend
@@ -57,6 +58,7 @@ npm run dev
 Optional frontend env:
 
 - `VITE_API_URL` (for deployed backend URL)
+- `VITE_ALLOW_REMOTE_DEV_API=true` (optional; allows dev server to use `VITE_API_URL` instead of localhost)
 
 ## Manual Verification Checklist
 
@@ -70,4 +72,4 @@ Optional frontend env:
 
 ## Notes
 
-Authentication and account creation are database-backed. Configure `MONGO_URI` before testing registration and login.
+Playlist operations are strictly database-backed and require both a valid JWT token and MongoDB connectivity.

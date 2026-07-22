@@ -3,11 +3,15 @@ import SongCard from "../components/SongCard";
 import { useMusic } from "../context/MusicContext";
 
 export default function Home() {
-  const { songs, playlists, searchTerm, selectedGenre, setSelectedGenre } = useMusic();
+  const { songs, playlists, searchTerm, selectedGenre, setSelectedGenre, playlistCounterPulse, setSelectedPlaylistId } = useMusic();
   const recommended = songs.slice(0, 20);
   const filteredSongs = selectedGenre ? songs.filter((song) => song.genre === selectedGenre) : recommended;
   const displaySongs = selectedGenre ? filteredSongs : recommended;
   const topGenres = Array.from(new Set(songs.map((song) => song.genre))).slice(0, 8);
+  const resolvePlaylistCover = (playlist) => {
+    const firstDetail = playlist?.songDetails?.[0];
+    return firstDetail?.imageUrl || firstDetail?.image || "https://images.unsplash.com/photo-1511379938547-c1f69419868d";
+  };
 
   return (
     <div className="space-y-8">
@@ -80,11 +84,41 @@ export default function Home() {
               {playlists.slice(0, 3).map((playlist) => (
                 <div key={playlist.id} className="rounded-3xl border border-slate-800 bg-slate-950 p-4">
                   <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="font-semibold text-white">{playlist.title}</p>
-                      <p className="text-sm text-slate-400">{playlist.songs.length} songs</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <img
+                        src={resolvePlaylistCover(playlist)}
+                        alt={playlist.title || "Playlist cover"}
+                        className="h-12 w-12 rounded-2xl object-cover"
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">{playlist.title}</p>
+                        <p className="mt-1 inline-flex rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-300">
+                          {playlist.privacy || "private"}
+                        </p>
+                        {(() => {
+                          const playlistId = String(playlist.id || playlist._id || "");
+                          const isPulsing = playlistCounterPulse.id === playlistId;
+                          const pulseKey = isPulsing
+                            ? `${playlistId}-${playlistCounterPulse.tick}`
+                            : `${playlistId}-static`;
+                          return (
+                            <p
+                              key={pulseKey}
+                              className={`text-sm ${isPulsing ? "animate-pulse text-green-300" : "text-slate-400"}`}
+                            >
+                              {playlist.songCount ?? playlist.songs?.length ?? 0} songs
+                            </p>
+                          );
+                        })()}
+                      </div>
                     </div>
-                    <span className="rounded-full bg-green-500 px-3 py-1 text-xs font-semibold text-slate-950">View</span>
+                    <Link
+                      to="/playlists"
+                      onClick={() => setSelectedPlaylistId(playlist.id || playlist._id)}
+                      className="rounded-full bg-green-500 px-3 py-1 text-xs font-semibold text-slate-950"
+                    >
+                      View
+                    </Link>
                   </div>
                 </div>
               ))}
