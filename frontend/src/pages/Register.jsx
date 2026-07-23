@@ -7,6 +7,7 @@ export default function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
 
   if (!isAuthReady) {
@@ -24,15 +25,24 @@ export default function Register() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
     const result = await registerUser(name, email, password);
-    if (!result) return;
+    if (!result) {
+      setIsSubmitting(false);
+      return;
+    }
 
     if (result === "requires-login") {
+      setIsSubmitting(false);
       navigate("/login", { state: { email: email.trim().toLowerCase() } });
       return;
     }
 
     setAuthError("");
+    setIsSubmitting(false);
     navigate("/");
   };
 
@@ -78,8 +88,8 @@ export default function Register() {
 
         {authError ? <p className="text-sm text-red-400">{authError}</p> : null}
 
-        <button type="submit" className="w-full rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400">
-          Register
+        <button type="submit" disabled={isSubmitting} className="w-full rounded-3xl bg-green-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-60">
+          {isSubmitting ? "Registering..." : "Register"}
         </button>
       </form>
     </div>

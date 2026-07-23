@@ -44,6 +44,8 @@ const allowedOrigins = [
   .filter(Boolean)
   .map((origin) => origin.replace(/\/$/, ""));
 
+const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || "").toLowerCase() === "true";
+
 const isAllowedLocalDevOrigin = (origin) => {
   try {
     const parsed = new URL(origin);
@@ -64,7 +66,12 @@ const isAllowedHostedFrontendOrigin = (origin) => {
   try {
     const parsed = new URL(origin);
     const hostname = parsed.hostname.toLowerCase();
-    return /\.netlify\.app$/i.test(hostname) || /\.vercel\.app$/i.test(hostname) || /\.onrender\.com$/i.test(hostname);
+    return (
+      /\.netlify\.app$/i.test(hostname) ||
+      /\.vercel\.app$/i.test(hostname) ||
+      /\.onrender\.com$/i.test(hostname) ||
+      /\.github\.io$/i.test(hostname)
+    );
   } catch {
     return false;
   }
@@ -75,6 +82,7 @@ app.use(
     origin(origin, callback) {
       // Allow non-browser clients and same-origin requests without an Origin header.
       if (!origin) return callback(null, true);
+      if (allowAllOrigins) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/$/, "");
       if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
@@ -88,7 +96,7 @@ app.use(
       return callback(null, false);
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: ["Accept", "Content-Type", "Authorization", "X-Requested-With"],
     credentials: true,
   }),
 );
@@ -103,6 +111,14 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
+app.get("/api", (req, res) => {
+  res.json({ status: "ok", service: "music-streaming-api" });
+});
+
+app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 

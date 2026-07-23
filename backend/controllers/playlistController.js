@@ -1,6 +1,9 @@
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const Playlist = require("../models/Playlist");
 const Song = require("../models/Song");
+
+let fallbackPlaylists = [];
 
 const getPlaylistTitle = (payload = {}) => {
   const rawTitle = typeof payload.title === "string" ? payload.title : payload.name;
@@ -61,12 +64,38 @@ const isMongoAvailable = () => {
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ""));
 
-const ensurePlaylistDbReady = (res) => {
-  if (isMongoAvailable()) return true;
-  res.status(503).json({
-    message: "Playlist service unavailable. Database connection is required.",
+const toFallbackPlaylistResponse = (playlist) => {
+  const songs = Array.isArray(playlist.songs)
+    ? playlist.songs.map((entry) => String(entry || "")).filter(Boolean)
+    : [];
+  const likedBy = Array.isArray(playlist.likedBy)
+    ? playlist.likedBy.map((entry) => String(entry || "")).filter(Boolean)
+    : [];
+
+  return normalizePlaylistResponse({
+    _id: playlist.id,
+    id: playlist.id,
+    user: playlist.user,
+    title: playlist.title,
+    description: playlist.description || "",
+    privacy: playlist.privacy || "private",
+    isPublic: (playlist.privacy || "private") === "public",
+    songs,
+    likedBy,
+    likes: typeof playlist.likes === "number" ? playlist.likes : likedBy.length,
+    comments: Array.isArray(playlist.comments) ? playlist.comments : [],
+    createdAt: playlist.createdAt,
+    updatedAt: playlist.updatedAt,
   });
-  return false;
+};
+
+const findFallbackOwnedPlaylist = (playlistId, userId) =>
+  fallbackPlaylists.find(
+    (playlist) => String(playlist.id) === String(playlistId) && String(playlist.user) === String(userId),
+  ) || null;
+
+const touchFallbackPlaylist = (playlist) => {
+  playlist.updatedAt = new Date().toISOString();
 };
 
 const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -138,10 +167,6 @@ const resolveSongDocumentFromLegacyEntry = async (entry) => {
 
 exports.createPlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
@@ -152,6 +177,25 @@ exports.createPlaylist = async (req, res) => {
     const privacy = getPlaylistPrivacy(req.body, "private");
     if (!title) {
       return res.status(400).json({ message: "Playlist title is required" });
+    }
+
+    if (!isMongoAvailable()) {
+      const now = new Date().toISOString();
+      const fallbackPlaylist = {
+        id: crypto.randomUUID(),
+        user: userId,
+        title,
+        description,
+        privacy,
+        songs: [],
+        likedBy: [],
+        likes: 0,
+        comments: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      fallbackPlaylists.push(fallbackPlaylist);
+      return res.status(201).json(toFallbackPlaylistResponse(fallbackPlaylist));
     }
 
     const playlist = await Playlist.create({
@@ -173,13 +217,16 @@ exports.createPlaylist = async (req, res) => {
 
 exports.getPlaylists = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const userPlaylists = fallbackPlaylists
+        .filter((playlist) => String(playlist.user) === String(userId))
+        .map((playlist) => toFallbackPlaylistResponse(playlist));
+      return res.json(userPlaylists);
     }
 
     const playlists = await Playlist.find({ user: userId }).populate("songs").exec();
@@ -191,13 +238,17 @@ exports.getPlaylists = async (req, res) => {
 
 exports.getPlaylistById = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+      return res.json(toFallbackPlaylistResponse(fallbackPlaylist));
     }
 
     if (!isValidObjectId(req.params.id)) {
@@ -217,23 +268,44 @@ exports.getPlaylistById = async (req, res) => {
 
 exports.addSongToPlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    if (!isValidObjectId(req.params.id)) {
-      return res.status(400).json({ message: "Invalid playlist id." });
     }
 
     const songId = req.body?.songId;
     const songPayload = req.body?.song;
     if (!songId) {
       return res.status(400).json({ message: "songId is required" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const fallbackSongId = String(songId || "").trim();
+      if (!fallbackSongId) {
+        return res.status(400).json({ message: "Invalid songId." });
+      }
+
+      const alreadyExists = (fallbackPlaylist.songs || []).some((id) => String(id) === fallbackSongId);
+      if (!alreadyExists) {
+        fallbackPlaylist.songs = [...(fallbackPlaylist.songs || []), fallbackSongId];
+        touchFallbackPlaylist(fallbackPlaylist);
+      }
+
+      return res.json({
+        playlist: toFallbackPlaylistResponse(fallbackPlaylist),
+        added: !alreadyExists,
+        songId: fallbackSongId,
+        song: songPayload && typeof songPayload === "object" ? songPayload : undefined,
+      });
+    }
+
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid playlist id." });
     }
 
     let resolvedSongId = String(songId);
@@ -291,22 +363,30 @@ exports.addSongToPlaylist = async (req, res) => {
 
 exports.removeSongFromPlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    if (!isValidObjectId(req.params.id)) {
-      return res.status(400).json({ message: "Invalid playlist id." });
-    }
-
     const songId = req.body?.songId || req.params.songId;
     if (!songId) {
       return res.status(400).json({ message: "songId is required" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const normalizedSongId = String(songId);
+      fallbackPlaylist.songs = (fallbackPlaylist.songs || []).filter((entry) => String(entry) !== normalizedSongId);
+      touchFallbackPlaylist(fallbackPlaylist);
+      return res.json(toFallbackPlaylistResponse(fallbackPlaylist));
+    }
+
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid playlist id." });
     }
 
     const playlist = await findOwnedPlaylist(req.params.id, userId, false);
@@ -326,13 +406,34 @@ exports.removeSongFromPlaylist = async (req, res) => {
 
 exports.updatePlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const title = getPlaylistTitle(req.body);
+      const description = getPlaylistDescription(req.body);
+      const privacy = getPlaylistPrivacy(req.body, fallbackPlaylist.privacy || "private");
+
+      const hasTitle = Boolean(title);
+      const hasDescription = Object.prototype.hasOwnProperty.call(req.body || {}, "description");
+      const hasPrivacy = Boolean(req.body?.privacy) || typeof req.body?.isPublic === "boolean";
+      if (!hasTitle && !hasDescription && !hasPrivacy) {
+        return res.status(400).json({ message: "Playlist title, description, or privacy is required" });
+      }
+
+      if (hasTitle) fallbackPlaylist.title = title;
+      if (hasDescription) fallbackPlaylist.description = description;
+      if (hasPrivacy) fallbackPlaylist.privacy = privacy;
+      touchFallbackPlaylist(fallbackPlaylist);
+
+      return res.json(toFallbackPlaylistResponse(fallbackPlaylist));
     }
 
     if (!isValidObjectId(req.params.id)) {
@@ -372,17 +473,9 @@ exports.updatePlaylist = async (req, res) => {
 
 exports.reorderPlaylistSongs = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    if (!isValidObjectId(req.params.id)) {
-      return res.status(400).json({ message: "Invalid playlist id." });
     }
 
     const orderedSongIds = Array.isArray(req.body?.songIds)
@@ -391,6 +484,35 @@ exports.reorderPlaylistSongs = async (req, res) => {
 
     if (!orderedSongIds.length) {
       return res.status(400).json({ message: "songIds array is required." });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const currentIds = (fallbackPlaylist.songs || []).map((entry) => String(entry));
+      if (currentIds.length !== orderedSongIds.length) {
+        return res.status(400).json({ message: "songIds length does not match playlist." });
+      }
+
+      const currentSet = new Set(currentIds);
+      if (orderedSongIds.some((entry) => !currentSet.has(entry))) {
+        return res.status(400).json({ message: "songIds contain invalid songs for this playlist." });
+      }
+
+      if (new Set(orderedSongIds).size !== orderedSongIds.length) {
+        return res.status(400).json({ message: "songIds contains duplicates." });
+      }
+
+      fallbackPlaylist.songs = orderedSongIds;
+      touchFallbackPlaylist(fallbackPlaylist);
+      return res.json(toFallbackPlaylistResponse(fallbackPlaylist));
+    }
+
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid playlist id." });
     }
 
     const playlist = await findOwnedPlaylist(req.params.id, userId, false);
@@ -424,13 +546,39 @@ exports.reorderPlaylistSongs = async (req, res) => {
 
 exports.repairPlaylistSongs = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const seenSongIds = new Set();
+      let repairedCount = 0;
+      const repairedSongIds = [];
+
+      for (const entry of fallbackPlaylist.songs || []) {
+        const normalizedSongId = String(entry || "").trim();
+        if (!normalizedSongId || seenSongIds.has(normalizedSongId)) {
+          repairedCount += 1;
+          continue;
+        }
+        seenSongIds.add(normalizedSongId);
+        repairedSongIds.push(normalizedSongId);
+      }
+
+      fallbackPlaylist.songs = repairedSongIds;
+      touchFallbackPlaylist(fallbackPlaylist);
+
+      return res.json({
+        playlist: toFallbackPlaylistResponse(fallbackPlaylist),
+        repairedCount,
+        songCount: repairedSongIds.length,
+      });
     }
 
     if (!isValidObjectId(req.params.id)) {
@@ -479,13 +627,35 @@ exports.repairPlaylistSongs = async (req, res) => {
 
 exports.likePlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const normalizedUserId = String(userId);
+      const likedBySet = new Set((fallbackPlaylist.likedBy || []).map((entry) => String(entry)));
+      let liked = false;
+
+      if (likedBySet.has(normalizedUserId)) {
+        fallbackPlaylist.likedBy = (fallbackPlaylist.likedBy || []).filter((entry) => String(entry) !== normalizedUserId);
+      } else {
+        fallbackPlaylist.likedBy = [...(fallbackPlaylist.likedBy || []), normalizedUserId];
+        liked = true;
+      }
+
+      fallbackPlaylist.likes = fallbackPlaylist.likedBy.length;
+      touchFallbackPlaylist(fallbackPlaylist);
+
+      return res.json({
+        playlist: toFallbackPlaylistResponse(fallbackPlaylist),
+        liked,
+      });
     }
 
     if (!isValidObjectId(req.params.id)) {
@@ -523,13 +693,31 @@ exports.likePlaylist = async (req, res) => {
 
 exports.addPlaylistComment = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const fallbackPlaylist = findFallbackOwnedPlaylist(req.params.id, userId);
+      if (!fallbackPlaylist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      const text = typeof req.body?.text === "string" ? req.body.text.trim().slice(0, 500) : "";
+      if (!text) {
+        return res.status(400).json({ message: "Comment text is required." });
+      }
+
+      const commentUser =
+        typeof req.body?.user === "string" && req.body.user.trim()
+          ? req.body.user.trim().slice(0, 80)
+          : req.user?.name || "Guest";
+
+      fallbackPlaylist.comments = Array.isArray(fallbackPlaylist.comments) ? fallbackPlaylist.comments : [];
+      fallbackPlaylist.comments.push({ user: commentUser, text, createdAt: new Date().toISOString() });
+      touchFallbackPlaylist(fallbackPlaylist);
+      return res.json(toFallbackPlaylistResponse(fallbackPlaylist));
     }
 
     if (!isValidObjectId(req.params.id)) {
@@ -562,13 +750,22 @@ exports.addPlaylistComment = async (req, res) => {
 
 exports.deletePlaylist = async (req, res) => {
   try {
-    if (!ensurePlaylistDbReady(res)) {
-      return;
-    }
-
     const userId = getRequestUserId(req);
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isMongoAvailable()) {
+      const before = fallbackPlaylists.length;
+      fallbackPlaylists = fallbackPlaylists.filter(
+        (playlist) =>
+          !(String(playlist.id) === String(req.params.id) && String(playlist.user) === String(userId)),
+      );
+
+      if (before === fallbackPlaylists.length) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+      return res.json({ message: "Playlist deleted" });
     }
 
     if (!isValidObjectId(req.params.id)) {

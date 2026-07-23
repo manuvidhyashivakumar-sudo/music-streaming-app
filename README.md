@@ -1,38 +1,64 @@
 # Music Streaming App
 
-Full-stack music streaming application with account-based authentication, playlist management, and playback controls.
+Full-stack music streaming app with authentication, profile management, interactive song browsing, and account-specific playlists.
 
 ## Tech Stack
 
-- Frontend: React + Vite + Axios + React Router
-- Backend: Node.js + Express
-- Database: MongoDB (required for playlist persistence)
-- Auth: JWT with HttpOnly secure session cookie plus bearer-token fallback for deployed clients
+- Frontend: React, Vite, Axios, React Router, Tailwind CSS
+- Backend: Node.js, Express
+- Auth: JWT + HttpOnly cookie (Bearer token fallback supported)
+- Persistence:
+- MongoDB for full production persistence
+- In-memory fallback for local/dev continuity when MongoDB is unavailable
 
-## Repository Structure
+## Project Structure
 
-- `backend/`: API server, auth, songs, playlists
-- `frontend/`: React client
+- backend: Express API (auth, songs, playlists)
+- frontend: React SPA client
 
-## Features
+## Implemented Features
 
 - User registration and login
-- Authenticated profile and password update
-- Song listing, search, like, and comments
-- Account-scoped playlists (each user only sees their own playlists)
-- Add/remove songs from playlists
-- Responsive player UI with controls
+- Session validation and profile fetch
+- Password update for authenticated user
+- Song catalog fetch with search support
+- Song likes and comments
+- Playlist create/read/update/delete
+- Add/remove/reorder songs in playlists
+- Playlist repair for legacy song references
+- Playlist like and comment interactions
+- Playlist sharing URL support
+- Account-scoped playlists (different users see different playlists)
 
-## Important Behavior
+## Key Fixes Included
 
-- Playlist data is handled by the backend and associated with the logged-in user.
-- Playlists are not stored in shared browser `localStorage` anymore.
-- Deployed clients can authenticate with either the server cookie or the returned bearer token.
-- The Add to Playlist action requires login and a selected/created playlist.
+- CORS handling improved to avoid blocked frontend API requests across common hosts.
+- Register flow guarded to prevent duplicate submissions from one click.
+- Playlist storage moved to backend account scope (no shared playlist localStorage behavior).
+- Add to Playlist action stabilized with request locking and backend fallback compatibility.
+- Frontend responsiveness improved with guarded async actions and lazy image loading.
 
-## Setup
+## Environment Variables
 
-### 1. Backend
+Backend (.env):
+
+- PORT: optional, default 5000
+- JWT_SECRET: required in production
+- MONGO_URI: optional for local testing, recommended in production
+- FRONTEND_URL, FRONTEND_ORIGIN, CLIENT_URL, APP_URL: optional CORS allow-list entries
+- FRONTEND_URLS: optional comma-separated CORS allow-list
+- NETLIFY_URL, VERCEL_URL: optional platform URL hints
+- CORS_ALLOW_ALL: set true to allow all frontend origins (use carefully in production)
+
+Frontend (.env):
+
+- VITE_API_URL: backend base URL, typically https://<backend-host>/api
+- VITE_API_ORIGIN: optional backend origin; /api is appended if missing
+- VITE_ALLOW_REMOTE_DEV_API: true to use remote backend while running local frontend dev server
+
+## Local Run
+
+Backend:
 
 ```bash
 cd backend
@@ -40,19 +66,7 @@ npm install
 npm run dev
 ```
 
-Environment variables:
-
-- `PORT` (optional, default `5000`)
-- `JWT_SECRET` (required in production; use a strong random value)
-- `MONGO_URI` (required for playlist CRUD)
-- `FRONTEND_URL` (optional, primary frontend URL for CORS)
-- `FRONTEND_ORIGIN` (optional alternate frontend URL for CORS)
-- `CLIENT_URL` (optional alternate frontend URL for CORS)
-- `APP_URL` (optional alternate frontend URL for CORS)
-- `FRONTEND_URLS` (optional comma-separated frontend URLs for CORS)
-- `NETLIFY_URL` or `VERCEL_URL` (optional hosting platform frontend URL)
-
-### 2. Frontend
+Frontend:
 
 ```bash
 cd frontend
@@ -60,22 +74,35 @@ npm install
 npm run dev
 ```
 
-Optional frontend env:
+## Build Validation
 
-- `VITE_API_URL` (for deployed backend URL)
-- `VITE_API_ORIGIN` (optional backend origin; `/api` is appended automatically)
-- `VITE_ALLOW_REMOTE_DEV_API=true` (optional; allows dev server to use `VITE_API_URL` instead of localhost)
+Frontend production build:
 
-## Manual Verification Checklist
+```bash
+cd frontend
+npm run build
+```
 
-- Register a new account.
-- Login with the new account.
-- Create a playlist.
-- Add at least one song from Home/Search to that playlist.
-- Open Playlists page and verify the song appears.
-- Logout, login with a different account, and verify playlists are different.
-- Remove song from playlist and verify it updates immediately.
+Backend startup check:
 
-## Notes
+```bash
+cd backend
+npm start
+```
 
-Playlist operations are strictly database-backed and require both a valid JWT token and MongoDB connectivity.
+## Functional Verification Checklist
+
+1. Register a new user account and confirm only one register request is processed per submit.
+2. Login and verify profile/session loads.
+3. Create playlist and add songs from the song list.
+4. Confirm playlist opens with added songs.
+5. Logout, login with another account, and verify playlists are isolated.
+6. Re-login as first user and verify original playlists remain.
+7. Remove and reorder songs and confirm updates persist.
+8. Test with MongoDB disconnected and confirm fallback playlist operations still work per account.
+
+## API Health Endpoints
+
+- GET /health
+- GET /api
+- GET /api/health

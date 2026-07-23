@@ -97,7 +97,7 @@ export default function SongCard({ song }) {
   return (
     <>
       <div className="bg-slate-900 rounded-2xl overflow-hidden transition hover:scale-[1.01]">
-        <img src={imageUrl} alt={song.title} className="h-48 w-full object-cover" />
+        <img src={imageUrl} alt={song.title} loading="lazy" decoding="async" className="h-48 w-full object-cover" />
 
         <div className="p-4">
           <div className="flex items-start justify-between gap-3">

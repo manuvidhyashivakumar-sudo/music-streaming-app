@@ -53,6 +53,46 @@ const normalizeApiBaseUrl = (rawUrl = "") => {
   return value;
 };
 
+const buildRenderOriginVariants = (origin = "") => {
+  const normalized = normalizeApiBaseUrl(origin);
+  if (!normalized) return [];
+
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.endsWith(".onrender.com")) return [];
+
+    const labels = host.split(".");
+    const serviceName = labels[0] || "";
+    const suffix = ".onrender.com";
+
+    const replacements = [
+      serviceName.replace(/-app$/i, "-backend"),
+      serviceName.replace(/-frontend$/i, "-backend"),
+      serviceName.replace(/-web$/i, "-backend"),
+      `${serviceName}-backend`,
+      `${serviceName}-api`,
+      serviceName.replace(/-app$/i, "-api"),
+      serviceName.replace(/-frontend$/i, "-api"),
+    ]
+      .map((entry) => String(entry || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    const seen = new Set([serviceName]);
+    const variants = [];
+
+    for (const candidateServiceName of replacements) {
+      if (seen.has(candidateServiceName)) continue;
+      seen.add(candidateServiceName);
+      variants.push(`${parsed.protocol}//${candidateServiceName}${suffix}`);
+    }
+
+    return variants;
+  } catch {
+    return [];
+  }
+};
+
 const buildApiBaseCandidates = () => {
   const prefixCandidates = ["", "/api", "/v1", "/api/v1"];
   const seedUrls = [
@@ -69,10 +109,25 @@ const buildApiBaseCandidates = () => {
     .map(normalizeApiBaseUrl)
     .filter(Boolean);
 
+  const expandedSeeds = [];
+  for (const seed of seedUrls) {
+    expandedSeeds.push(seed);
+
+    try {
+      const parsed = new URL(seed);
+      const renderVariants = buildRenderOriginVariants(parsed.origin);
+      for (const variantOrigin of renderVariants) {
+        expandedSeeds.push(variantOrigin);
+      }
+    } catch {
+      // Ignore invalid URLs in seed expansion.
+    }
+  }
+
   const seen = new Set();
   const candidates = [];
 
-  for (const seed of seedUrls) {
+  for (const seed of expandedSeeds) {
     try {
       const parsed = new URL(seed);
       const origin = parsed.origin;
@@ -102,6 +157,7 @@ const buildApiBaseCandidates = () => {
 
 const MusicContext = createContext();
 const AUTH_STORAGE_KEY = "musicify_auth_token";
+const MAX_AUTH_BASE_ATTEMPTS = 2;
 
 const authRouteFamilies = [
   {
@@ -408,6 +464,8 @@ export function MusicProvider({ children }) {
   const activeAuthRoutesRef = useRef(authRouteFamilies[0]);
   const latestAuthCheckRef = useRef(0);
   const playlistHydrationRef = useRef(new Set());
+  const registerRequestRef = useRef(null);
+  const playlistMutationLockRef = useRef(new Set());
 
   const readStoredAuthToken = useCallback(() => {
     if (typeof window === "undefined") return "";
@@ -794,7 +852,7 @@ export function MusicProvider({ children }) {
   const resolveLoginWithFallbackBases = useCallback(
     async (normalizedEmailInput, password) => {
       const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
-      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean);
+      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean).slice(0, MAX_AUTH_BASE_ATTEMPTS);
       const seen = new Set();
 
       for (const candidate of candidates) {
@@ -860,7 +918,7 @@ export function MusicProvider({ children }) {
   const resolveRegisterWithFallbackBases = useCallback(
     async (payload) => {
       const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
-      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean);
+      const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean).slice(0, MAX_AUTH_BASE_ATTEMPTS);
       const seen = new Set();
 
       for (const candidate of candidates) {
@@ -1312,7 +1370,9 @@ export function MusicProvider({ children }) {
       const normalizedEmailInput = email.trim().toLowerCase();
       const loginResult = await resolveLoginWithFallbackBases(normalizedEmailInput, password);
       if (!loginResult.ok) {
-        throw new Error("Login failed. Could not reach a valid backend auth endpoint.");
+        throw new Error(
+          "Login failed. Could not reach a valid backend auth endpoint. Set VITE_API_URL to your backend service URL (for example https://<your-backend>.onrender.com/api).",
+        );
       }
 
       setUser(loginResult.user || null);
@@ -1331,6 +1391,11 @@ export function MusicProvider({ children }) {
   };
 
   const registerUser = async (name, email, password) => {
+    if (registerRequestRef.current) {
+      return registerRequestRef.current;
+    }
+
+    registerRequestRef.current = (async () => {
     try {
       const normalizedNameInput = name.trim();
       const normalizedEmailInput = email.trim().toLowerCase();
@@ -1418,7 +1483,12 @@ export function MusicProvider({ children }) {
           "Registration failed. Please try again.",
       );
       return false;
+    } finally {
+      registerRequestRef.current = null;
     }
+    })();
+
+    return registerRequestRef.current;
   };
 
   const logoutUser = async () => {
@@ -1655,6 +1725,13 @@ export function MusicProvider({ children }) {
     }
 
     const normalizedPlaylistId = String(resolvedPlaylistId);
+    const mutationKey = `${normalizedPlaylistId}:${normalizedSongId}`;
+    if (playlistMutationLockRef.current.has(mutationKey)) {
+      return { ok: true, message: "Song add already in progress." };
+    }
+
+    playlistMutationLockRef.current.add(mutationKey);
+
     const playlist =
       resolvedPlaylist ||
       playlists.find((entry) => String(entry.id || entry._id) === normalizedPlaylistId) ||
@@ -1749,6 +1826,8 @@ export function MusicProvider({ children }) {
       const message = error.response?.data?.message || "Unable to add song to playlist.";
       setAuthError(message);
       return { ok: false, message };
+    } finally {
+      playlistMutationLockRef.current.delete(mutationKey);
     }
   };
 
