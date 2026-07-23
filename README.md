@@ -106,3 +106,33 @@ npm start
 - GET /health
 - GET /api
 - GET /api/health
+
+## Postman Quick Verify
+
+Import these files:
+
+- postman/MusicStreamingApp.postman_collection.json
+- postman/MusicStreamingApp.postman_environment.json
+
+Set environment values:
+
+- baseUrl = https://your-backend-service.onrender.com/api
+- baseUrlNoApi = https://your-backend-service.onrender.com
+- email = your test user email
+- password = your test user password
+
+Run in order:
+
+1. 1. Health -> GET /api/health
+2. 2. Auth -> POST Register
+3. 2. Auth -> POST Login
+4. 4. Playlists (Auth Required) -> GET Playlists
+5. 4. Playlists (Auth Required) -> POST Create Playlist
+6. 3. Songs -> GET Songs
+7. 4. Playlists (Auth Required) -> POST Add Song To Playlist
+
+Notes:
+
+- The collection auto-saves authToken from login/register tests.
+- playlistId and songId are auto-saved from create playlist and songs calls.
+- If Register returns 409, continue with Login (account already exists).

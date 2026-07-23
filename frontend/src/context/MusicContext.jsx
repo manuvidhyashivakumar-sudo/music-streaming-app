@@ -53,6 +53,12 @@ const normalizeApiBaseUrl = (rawUrl = "") => {
   return value;
 };
 
+const parseEnvCandidates = (rawValue = "") =>
+  String(rawValue || "")
+    .split(",")
+    .map((entry) => normalizeApiBaseUrl(entry))
+    .filter(Boolean);
+
 const buildRenderOriginVariants = (origin = "") => {
   const normalized = normalizeApiBaseUrl(origin);
   if (!normalized) return [];
@@ -95,7 +101,9 @@ const buildRenderOriginVariants = (origin = "") => {
 
 const buildApiBaseCandidates = () => {
   const prefixCandidates = ["", "/api", "/v1", "/api/v1"];
+  const hintCandidates = parseEnvCandidates(import.meta.env.VITE_API_CANDIDATES);
   const seedUrls = [
+    ...hintCandidates,
     import.meta.env.VITE_API_URL,
     import.meta.env.VITE_API_ORIGIN,
     import.meta.env.VITE_PROXY_TARGET,
@@ -157,7 +165,10 @@ const buildApiBaseCandidates = () => {
 
 const MusicContext = createContext();
 const AUTH_STORAGE_KEY = "musicify_auth_token";
-const MAX_AUTH_BASE_ATTEMPTS = 2;
+const MAX_AUTH_BASE_ATTEMPTS = Math.max(
+  2,
+  Number.parseInt(String(import.meta.env.VITE_MAX_AUTH_BASE_ATTEMPTS || ""), 10) || (import.meta.env.DEV ? 2 : 20),
+);
 
 const authRouteFamilies = [
   {
@@ -806,7 +817,7 @@ export function MusicProvider({ children }) {
         }
 
         if (!response || !selectedFamily) {
-          return { ok: false };
+          return { ok: false, reason: "No supported login route on candidate base URL." };
         }
 
         activeAuthRoutesRef.current = selectedFamily;
@@ -830,7 +841,7 @@ export function MusicProvider({ children }) {
             );
             normalizedUser = normalizeUser(profileResponse.data?.user || profileResponse.data);
           } catch {
-            return { ok: false };
+            return { ok: false, reason: "Login succeeded but profile fetch/token parsing failed." };
           }
         }
 
@@ -841,7 +852,7 @@ export function MusicProvider({ children }) {
           token: resolvedToken,
         };
       } catch {
-        return { ok: false };
+        return { ok: false, reason: "Network/CORS/auth request failed for this base URL." };
       } finally {
         api.defaults.baseURL = previousBaseUrl;
       }
@@ -854,19 +865,25 @@ export function MusicProvider({ children }) {
       const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
       const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean).slice(0, MAX_AUTH_BASE_ATTEMPTS);
       const seen = new Set();
+      const attemptedCandidates = [];
+      let lastReason = "";
 
       for (const candidate of candidates) {
         if (seen.has(candidate)) continue;
         seen.add(candidate);
+        attemptedCandidates.push(candidate);
 
         const result = await resolveLoginAgainstBase(candidate, normalizedEmailInput, password);
         if (result.ok) {
           api.defaults.baseURL = candidate;
           return result;
         }
+        if (result.reason) {
+          lastReason = result.reason;
+        }
       }
 
-      return { ok: false };
+      return { ok: false, attemptedCandidates, reason: lastReason };
     },
     [resolveLoginAgainstBase],
   );
@@ -901,13 +918,16 @@ export function MusicProvider({ children }) {
         }
 
         if (!response || !selectedFamily) {
-          return { ok: false };
+          return { ok: false, reason: "No supported register route on candidate base URL." };
         }
 
         activeAuthRoutesRef.current = selectedFamily;
         return { ok: true, response, selectedFamily, baseUrl };
       } catch (error) {
-        throw error;
+        return {
+          ok: false,
+          reason: error?.response?.data?.message || "Network/CORS/register request failed for this base URL.",
+        };
       } finally {
         api.defaults.baseURL = previousBaseUrl;
       }
@@ -920,19 +940,25 @@ export function MusicProvider({ children }) {
       const currentBase = normalizeApiBaseUrl(api.defaults.baseURL || "");
       const candidates = [currentBase, ...buildApiBaseCandidates()].filter(Boolean).slice(0, MAX_AUTH_BASE_ATTEMPTS);
       const seen = new Set();
+      const attemptedCandidates = [];
+      let lastReason = "";
 
       for (const candidate of candidates) {
         if (seen.has(candidate)) continue;
         seen.add(candidate);
+        attemptedCandidates.push(candidate);
 
         const result = await resolveRegisterAgainstBase(candidate, payload);
         if (result.ok) {
           api.defaults.baseURL = candidate;
           return result;
         }
+        if (result.reason) {
+          lastReason = result.reason;
+        }
       }
 
-      return { ok: false };
+      return { ok: false, attemptedCandidates, reason: lastReason };
     },
     [resolveRegisterAgainstBase],
   );
@@ -1371,7 +1397,7 @@ export function MusicProvider({ children }) {
       const loginResult = await resolveLoginWithFallbackBases(normalizedEmailInput, password);
       if (!loginResult.ok) {
         throw new Error(
-          "Login failed. Could not reach a valid backend auth endpoint. Set VITE_API_URL to your backend service URL (for example https://<your-backend>.onrender.com/api).",
+          `Login failed. Could not reach a valid backend auth endpoint. ${loginResult.reason || ""} Tried: ${(loginResult.attemptedCandidates || []).join(", ") || "none"}. Set VITE_API_URL to your backend service URL (for example https://<your-backend>.onrender.com/api).`,
         );
       }
 
@@ -1423,7 +1449,9 @@ export function MusicProvider({ children }) {
       });
 
       if (!registerResult.ok) {
-        throw new Error("No valid register endpoint found on backend server.");
+        throw new Error(
+          `No valid register endpoint found on backend server. ${registerResult.reason || ""} Tried: ${(registerResult.attemptedCandidates || []).join(", ") || "none"}`,
+        );
       }
 
       const { response, selectedFamily } = registerResult;

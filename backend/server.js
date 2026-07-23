@@ -32,6 +32,11 @@ const configuredFrontendOrigins = [
     .filter(Boolean)),
 ];
 
+const explicitConfiguredFrontendOrigins = configuredFrontendOrigins
+  .filter(Boolean)
+  .map((origin) => String(origin).trim())
+  .filter((origin) => !/^https?:\/\/(localhost|127\.0\.0\.1|::1)(:\d+)?\/?$/i.test(origin));
+
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -45,6 +50,7 @@ const allowedOrigins = [
   .map((origin) => origin.replace(/\/$/, ""));
 
 const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || "").toLowerCase() === "true";
+const allowHttpsOriginsWhenNoExplicitConfig = explicitConfiguredFrontendOrigins.length === 0;
 
 const isAllowedLocalDevOrigin = (origin) => {
   try {
@@ -77,6 +83,15 @@ const isAllowedHostedFrontendOrigin = (origin) => {
   }
 };
 
+const isSafeHttpsOrigin = (origin) => {
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -93,6 +108,11 @@ app.use(
       if (isAllowedHostedFrontendOrigin(normalizedOrigin)) {
         return callback(null, true);
       }
+
+      if (allowHttpsOriginsWhenNoExplicitConfig && isSafeHttpsOrigin(normalizedOrigin)) {
+        return callback(null, true);
+      }
+
       return callback(null, false);
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
@@ -123,6 +143,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/users", authRoutes);
 app.use("/api/songs", songRoutes);
 app.use("/api/playlists", playlistRoutes);
 

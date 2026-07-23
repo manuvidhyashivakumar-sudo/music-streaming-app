@@ -1,0 +1,421 @@
+{
+  "info": {
+    "name": "Music Streaming App API",
+    "description": "Preconfigured collection for deployment verification of auth and playlists.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlNoApi}}/health",
+              "host": ["{{baseUrlNoApi}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "GET /api/health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Auth",
+      "item": [
+        {
+          "name": "POST Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200/201/409', function () {",
+                  "  pm.expect([200, 201, 409]).to.include(pm.response.code);",
+                  "});",
+                  "let data = {};",
+                  "try { data = pm.response.json(); } catch (e) {}",
+                  "const token = data.token || data.accessToken || (data.data && (data.data.token || data.data.accessToken));",
+                  "if (token) { pm.environment.set('authToken', token); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "let data = {};",
+                  "try { data = pm.response.json(); } catch (e) {}",
+                  "const token = data.token || data.accessToken || (data.data && (data.data.token || data.data.accessToken));",
+                  "pm.test('Token exists', function () {",
+                  "  pm.expect(token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (token) { pm.environment.set('authToken', token); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "profile"]
+            }
+          }
+        },
+        {
+          "name": "POST Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Songs",
+      "item": [
+        {
+          "name": "GET Songs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/songs",
+              "host": ["{{baseUrl}}"],
+              "path": ["songs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let data = [];",
+                  "try { data = pm.response.json(); } catch (e) {}",
+                  "if (Array.isArray(data) && data.length) {",
+                  "  const first = data[0];",
+                  "  const id = first._id || first.id;",
+                  "  if (id) pm.environment.set('songId', String(id));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Playlists (Auth Required)",
+      "item": [
+        {
+          "name": "GET Playlists",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/playlists",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists"]
+            }
+          }
+        },
+        {
+          "name": "POST Create Playlist",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Deployment Test Playlist\",\n  \"description\": \"Created from Postman collection\",\n  \"privacy\": \"private\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/playlists",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let data = {};",
+                  "try { data = pm.response.json(); } catch (e) {}",
+                  "const playlist = data.playlist || data.data?.playlist || data.data || data;",
+                  "const id = playlist && (playlist._id || playlist.id);",
+                  "if (id) pm.environment.set('playlistId', String(id));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Add Song To Playlist",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"songId\": \"{{songId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}/add",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}", "add"]
+            }
+          }
+        },
+        {
+          "name": "PATCH Reorder Playlist Songs",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"songIds\": [\"{{songId}}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}/reorder",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}", "reorder"]
+            }
+          }
+        },
+        {
+          "name": "PATCH Like Playlist",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}/like",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}", "like"]
+            }
+          }
+        },
+        {
+          "name": "POST Playlist Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Deployment flow test comment\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}", "comments"]
+            }
+          }
+        },
+        {
+          "name": "PATCH Remove Song From Playlist",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"songId\": \"{{songId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}/remove",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}", "remove"]
+            }
+          }
+        },
+        {
+          "name": "DELETE Playlist",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/playlists/{{playlistId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["playlists", "{{playlistId}}"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "event": [],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api"
+    },
+    {
+      "key": "baseUrlNoApi",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "name",
+      "value": "Test User"
+    },
+    {
+      "key": "email",
+      "value": "testuser@example.com"
+    },
+    {
+      "key": "password",
+      "value": "password123"
+    },
+    {
+      "key": "authToken",
+      "value": ""
+    },
+    {
+      "key": "playlistId",
+      "value": ""
+    },
+    {
+      "key": "songId",
+      "value": ""
+    }
+  ]
+}
